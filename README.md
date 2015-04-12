@@ -31,7 +31,7 @@ Quite simple isn't it ;)
 ** Cool i guess.. what about these functions **  
 Here you go this is a list of the supported functions as for now  
 ``` add_link(libraryname)  ``` Maps to -l command in g++ ( with -static flag ), simply links to the specified static library
-``` add_link_directory(path_to_library) ``` Maps to -L command in g++, adds a directory to the list that is searched when trying to link 
+``` add_link_directory(path_to_library) ``` Maps to -L command in g++, adds a directory to the list that is searched when trying to link  
 ``` add_include_directory(path) ``` Maps to -I command in g++, adds a directory to the list of include directories  
 ``` compile(true | false) ``` If false the script won't be compiled, if true it will be compiled. This is useful when writing a larger source file and you don't want to continuosly compile it every time you press Ctrl + S.  
 ``` force_init(true | false) ``` If the script is already running but you want to call the init() function again ( for some initialization purpose, set true. Defaults to false. It is useful when you may need to respawn an object or similar situations
