@@ -1,5 +1,34 @@
 ##Scriptosaurus
+
+### Introduction
+Scriptosaurus is a C++ scripting system that allows you to use C++ as a scripting system and modify scripts at runtime. 
+
+**Features** : 
+- Debug / Release mode 
+- stdout / stderr ( not yet ) synched ( via client side callback ) 
+- Modify script and runtime and specify custom compiler flags / what to do all inside the script.
+- Script is 100% portable to the client application, no custom syntax or anything else.
+- Separate script / output channel ( run script on one machine and redirect output to another ) 
+- Script subdirectories and addressing works
+
+### TODOs:
+- MSVC debugging ( .pdb files are copied, but still something doesn't work )
+- Exception handling
+- ```init()``` not properly called
+- UNIX port
+
 ### Writing a script 
+
+### Addressing a script from the client API
+Since we support subdirectories if you need to address a file contained in a subdirectory you just need to substitute the ```//``` with ```:```, like this :
+```
+// Directory structure : 
+// Scripts \ <-- You set this as root directory when initializing the ScriptManager
+//      sub \
+//          script.cpp
+
+Script sub_script("sub:script");
+```
 
 ### Compiler options
 This chapter aims at explaining how you can specify compiler options for file. If you glance through the API you will notice that there is no reference to compiler flags. This is because everything is handled inside the script itself. Each script consist of a single .cpp file and it has its own flags. They are specified at the beginning of the file, **inside the first comment block**.  
