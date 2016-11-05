@@ -220,11 +220,6 @@ namespace scriptosaurus
 	*/
 	namespace compiler
 	{
-#if defined(scriptosaurus_msvc)
-		const char* kMSVCPath = scriptosaurus_msvc;
-		const char* kMSVCCompiler = "cl.exe";
-		const char* kMSVCLinker = "link.exe";
-		
 		struct CompilerInput
 		{
 			std::string input_file;
@@ -237,6 +232,14 @@ namespace scriptosaurus
 			std::vector<std::string> obj_files;
 			std::string out_file;
 		};
+
+		bool compile(const ScriptName& name, const CompilerInput& input, const internal::ScriptMetadata& metadata);
+		bool link(const ScriptName& name, const LinkerInput& input, const internal::ScriptMetadata& metadata);
+
+#if defined(scriptosaurus_msvc)
+		const char* kMSVCPath = scriptosaurus_msvc;
+		const char* kMSVCCompiler = "cl.exe";
+		const char* kMSVCLinker = "link.exe";
 
 		inline bool compile(const ScriptName& name, const CompilerInput& input, const internal::ScriptMetadata& metadata)
 		{
@@ -303,6 +306,63 @@ namespace scriptosaurus
 
 			platform::delete_file(kLinkerBat);
 			
+			return res == ERROR_SUCCESS;
+		}
+#elif defined(scriptosaurus_clang_cl)
+		const char* kMSVCPath = scriptosaurus_clang_cl;
+		const char* kClangCompiler = "clang-cl.exe";
+		const char* kMSVCLinker = "link.exe";
+
+		inline bool compile(const ScriptName& name, const CompilerInput& input, const internal::ScriptMetadata& metadata)
+		{
+			// TODO: No clang path supported ( add option )
+			const std::string clang = kClangCompiler;
+
+			std::stringstream clang_ss;
+			clang_ss << clang << " ";
+			clang_ss << (metadata.generate_debug ? "/Zi " : " ") << input.input_file; // Debug info
+
+																					// preprocessor
+			for (const auto& kv : metadata.defines)
+				clang_ss << " /D" << kv.first << "=" << kv.second << " ";
+
+			clang_ss << " /c /EHsc /MT /Fo" << std::quoted(input.out_file) << " ";
+
+			int res = platform::execute_command(clang_ss.str().c_str());
+
+			return res == ERROR_SUCCESS;
+		}
+
+		inline bool link(const ScriptName& name, const LinkerInput& input, const internal::ScriptMetadata& metadata)
+		{
+			const char kLinkerBat[] = ".scriptosaurus_msvc_link.bat";
+#if defined(scriptosaurus_32bit)
+			const std::string vcvars = std::string(kMSVCPath) + "/vcvars32.bat";
+#elif defined(scriptosaurus_64bit)
+			const std::string vcvars = std::string(kMSVCPath) + "/vcvars64.bat";
+#else
+#	error Please define architecture for MSVC compiler
+#endif
+			const std::string link = std::string(kMSVCPath) + "/" + kMSVCLinker;
+
+			std::stringstream bat_ss;
+			bat_ss << "@ECHO OFF" << std::endl;
+			bat_ss << std::quoted(vcvars) << " && "; // setup environment
+			bat_ss << std::quoted(link); // link.exe
+			bat_ss << " /DLL "; // DLL output
+			bat_ss << (metadata.generate_debug ? "/DEBUG " : "");
+			bat_ss << " /OUT:" << std::quoted(input.out_file) << " "; // output file
+			for (const auto& obj : input.obj_files)
+				bat_ss << std::quoted(obj) << " "; // list of obj files to input
+
+			std::ofstream bat_stream(kLinkerBat);
+			bat_stream << bat_ss.str();
+			bat_stream.close();
+
+			int res = platform::execute_command(kLinkerBat);
+
+			platform::delete_file(kLinkerBat);
+
 			return res == ERROR_SUCCESS;
 		}
 #endif
