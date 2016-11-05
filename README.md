@@ -98,20 +98,21 @@ script_routine(sample_callback)
 
 List of supported or to be supported platforms / compilers for the immediate future.
 
-| Backend                  | Supported | Planned? |
-| ------------------------ | :-------: | :------: |
-| Win32                    |    Yes    |          |
-| Posix                    |    No     |   Yes    |
-| MSVC2015                 |   Yes*    |   Done   |
-| MSVC2013                 |    No     |   No**   |
-| Clang 3.8 ( under MSVC ) |    Yes    |   Done   |
-| GCC??                    |    No     |    No    |
+| Backend    | Supported | Planned? |
+| ---------- | :-------: | :------: |
+| Win32      |    Yes    |          |
+| Posix      |    No     |   Yes    |
+| MSVC2015   |   Yes*    |   Done   |
+| MSVC2013   |    No     |   No**   |
+| Clang (CL) |    Yes    |   Done   |
+| GCC??      |    No     |    No    |
 
 - `*`  Visual studio 2015 keeps `.pdb` pinned down even if `FreeLibrary` is called , thus if you want to enable live scripting you have to check `Tools > Options > Debugging > General > Use Native Compatibility Mode` . This will use an old debugging engine where some preview features are unfortunately not supported. 
 - `**` Visual studio 2013 hasn't been tested yet, if you want to know if it works you should: 
   - See if all C++11+ features are supported
   - Find a way to use the native debugging engine if you want the live scripting
-- `***` Very soon
+
+Adding a compiler backend is extremely simple as it's a matter of creating the command and calling execute on it. All the parameters are already provided.
 
 ### Advanced Usage
 
