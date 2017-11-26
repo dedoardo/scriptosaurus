@@ -1,6 +1,7 @@
 #define _CRTDBG_MAP_ALLOC
 #include <stdlib.h>
 #include <crtdbg.h>
+#include <conio.h>
 
 #define SSR_LIVE
 #define SSR_IMPLEMENTATION
@@ -33,13 +34,11 @@ int main()
 	// Doesn't necessarily have to be global, just make sure it's relative to your working directory
 	ssr_init(&ssr, "C:/Code/scriptosaurus/example/scripts", NULL);
 	
-	ssr_cb(&ssr, SSR_CB_ERR | SSR_CB_WARN, msg_callback); 
+	ssr_cb(&ssr, SSR_CB_ERR | SSR_CB_WARN | SSR_CB_INFO, msg_callback); 
 
 	// Always call run before any other ssr_add
 	ssr_run(&ssr);
 
-	int i = 0;
-		
 	ssr_func_t func = NULL;
 	while (true)
 	{
@@ -49,8 +48,8 @@ int main()
 		printf(">");
 		scanf("%s %s %f", script_name, func_name, &arg);
 
-		if (strcmp("quit", script_name) == 0) 
-			break;
+        if (strcmp("quit", script_name) == 0)
+            break;
 
 		ssr_add(&ssr, script_name, func_name, &func);
 		while (func == NULL); // Waiting for script to be compiled
@@ -61,6 +60,6 @@ int main()
 	}
 
 	ssr_destroy(&ssr);
-	_CrtDumpMemoryLeaks();
-	return EXIT_SUCCESS;
+	printf("%d\n", _CrtDumpMemoryLeaks());
+ 	return EXIT_SUCCESS;
 }

@@ -376,7 +376,7 @@ static void _ssr_vec_push(_ssr_vec_t* vec, const void* el)
 		size_t new_capacity = capacity * 2 > 32 ? capacity * 2 : 32;
 		vec->beg = (uint8_t*)realloc(vec->beg, vec->size * new_capacity);
 		vec->cur = vec->beg;
-		vec->end = vec->end + new_capacity * vec->size;
+		vec->end = vec->beg + new_capacity * vec->size;
 	}
 
 	memcpy(vec->cur, el, vec->size);
@@ -547,7 +547,7 @@ static void _ssr_thread(struct _ssr_thread_t* thread, void* fun, void* args)
 
 static void _ssr_thread_join(struct _ssr_thread_t* thread)
 {
-	if (thread == NULL || thread->handle != NULL)
+	if (thread == NULL || thread->handle == NULL)
 		return;
 
 	WaitForSingleObject(thread->handle, INFINITE);
@@ -685,15 +685,14 @@ static const char* _ssr_extract_ext(const char* path)
 static _ssr_str_t _ssr_replace_seps(const char* str, char new_sep)
 {
 	size_t rel_path_len = strlen(str); // TODO: Can we avoid?
-	_ssr_str_t ret;
-	ret.b = (char*)malloc(rel_path_len + 1);
+    char* buffer = _ssr_alloc(rel_path_len + 1);
 	const char* read = str;
-	char* write = ret.b;
+	char* write = buffer;
 	while (*read != '\0')
 	{
 		if (*read == '\\' || *read == '/')
 		{
-			if (write > ret.b && *(ret.b - 1) != new_sep) // Avoiding double separator
+			if (write > buffer && *(buffer - 1) != new_sep) // Avoiding double separator
 			{
 				*(write++) = new_sep;
 				++read;
@@ -703,8 +702,8 @@ static _ssr_str_t _ssr_replace_seps(const char* str, char new_sep)
 		*(write++) = *(read++);
 	}
 	*write = '\0';
-	_ssr_str_t no_ext_ret = _ssr_remove_ext(ret.b, -1);
-	free(ret.b);
+	_ssr_str_t no_ext_ret = _ssr_remove_ext(buffer, -1);
+	_ssr_free(buffer);
 	return no_ext_ret;
 }
 
@@ -905,10 +904,10 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		char* fmt = "%s && cl.exe %s %s %s %s /Fo\"%s\" %s \"%s\"";
 
 		_ssr_str_t compile = _ssr_str_f(fmt, vcvars, beg_args, default_args, gen_dbg, mt_lib, stages & _SSR_LINK ? compile_out.b : _out, end_args, input);
-		int ret = _ssr_run(compile.b);
+		int ret = _ssr_run(compile.b) == 0;
 		_ssr_str_destroy(compile);
-		if (ret != 0)
-			goto end;
+        if (!ret)
+            goto end;
 	}
 	
 	if (stages & _SSR_LINK)
@@ -940,17 +939,16 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		char* fmt = "%s && link.exe %s %s %s %s /OUT:\"%s\" %s \"%s\" %s";
 
 		_ssr_str_t link = _ssr_str_f(fmt, vcvars, beg_args, default_flags, gen_dbg, target, _out, end_args, stages & _SSR_COMPILE ? compile_out.b : input, link_directories);
-		int ret = _ssr_run(link.b);
-		free(link.b);
-		if (ret != 0)
+		int ret = _ssr_run(link.b) == 0;
+		_ssr_str_destroy(link);
+		if (!ret)
 			goto end;
 	}
 
 	ret = true;
 end:
 	free(vcvars);
-	if (compile_out.b != NULL)
-		_ssr_str_destroy(compile_out);
+	_ssr_str_destroy(compile_out);
 	return ret;
 }
 
@@ -1227,8 +1225,10 @@ static void _ssr_on_file(void* args, const char* base, const char* filename)
 	}
 
 	// In case skipping file
-	if (exts[exti] == '\0')
-		return;
+    if (exts[exti] == '\0') {
+        _ssr_str_destroy(full_path);
+        return;
+    }
 
 	// Computing script id
 	// |root|rel_path|filename
@@ -1260,7 +1260,9 @@ static void _ssr_on_file(void* args, const char* base, const char* filename)
 
 		// Time to compile and link into dll
 		bool compile_ret = _ssr_compile(full_path.b, ssr->config, shared_lib_out.b, _SSR_COMPILE_N_LINK);
-		// TODO add error
+        if (!compile_ret) {
+            _ssr_log(SSR_CB_ERR, "something went wrong"); // todo
+        }
 
 		// Loading library
 		_ssr_lib_t shared_lib;
@@ -1354,9 +1356,7 @@ _ssr_main(void* args)
 	_ssr_str_destroy(bin_dir);
 	return EXIT_SUCCESS;
 }
-#endif
-
-#ifndef SSR_LIVE
+#else
 static void _ssr_add_file_cb(void* args, const char* base, const char* filename)
 {
 	_ssr_vec_t* files = (_ssr_vec_t*)args;
@@ -1551,9 +1551,7 @@ SSR_DEF void ssr_cb(struct ssr_t* ssr, int mask, ssr_cb_t cb)
 
 static void _ssr_log(int type, const char* fmt, ...)
 {
-#if defined(SSR_WIN) && defined(_MSC_VER)
-	static __declspec(thread) ssr_t* ssr = NULL;
-#endif
+	static ssr_t* ssr = NULL;
 
 	if (fmt == NULL)
 	{
