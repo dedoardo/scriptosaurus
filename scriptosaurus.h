@@ -124,6 +124,7 @@ typedef struct ssr_config_t
 	// If not specified they are filled in matching the client compiler
 	int compiler; // SSR_COMPILER
 	int msvc_ver; // SSR_MSVC_VER
+	const char* msvc141_path;
 	int target_arch; // SSR_ARCH
 	int flags; // SSR_FLAGS
 	char* compile_args_beg; // added before any other flag
@@ -851,8 +852,10 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 	char* vcvars = NULL;
 	{
 		// Atleast from 15->17 installations paths are different
+
 		static const char* bases[] = {
-			"C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Auxiliary/Build/"
+			config->msvc141_path,
+			"C:/Program Files (x86)/Microsoft Visual Studio 14.0/VC"
 		};
 
 		static const char* archs[] = {
@@ -875,12 +878,6 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 	
 	if (stages & _SSR_COMPILE)
 	{
-		// TODO: ifdefs based on host arch
-		static const char* bases[] = {
-			"",
-			"C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Tools/MSVC/14.11.25503/bin/HostX64/x64/"
-		};
-		
 		// defines
 		char defines[_SSR_ARGS_BUF_LEN];
 		_ssr_merge_in(defines, _SSR_ARGS_BUF_LEN, "/D", config->defines, config->num_defines);
@@ -905,9 +902,9 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 			compile_out = _ssr_str_f("%s.obj", _out);
 
 		// vcvars - base - beg_args - default_flags - gen_dbg - mt_lib - compile_out - end_args - input files
-		char* fmt = "%s && \"%scl.exe\" %s %s %s %s /Fo\"%s\" %s \"%s\"";
+		char* fmt = "%s && cl.exe %s %s %s %s /Fo\"%s\" %s \"%s\"";
 
-		_ssr_str_t compile = _ssr_str_f(fmt, vcvars, bases[config->target_arch], beg_args, default_args, gen_dbg, mt_lib, stages & _SSR_LINK ? compile_out.b : _out, end_args, input);
+		_ssr_str_t compile = _ssr_str_f(fmt, vcvars, beg_args, default_args, gen_dbg, mt_lib, stages & _SSR_LINK ? compile_out.b : _out, end_args, input);
 		int ret = _ssr_run(compile.b);
 		_ssr_str_destroy(compile);
 		if (ret != 0)
@@ -916,11 +913,6 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 	
 	if (stages & _SSR_LINK)
 	{
-		static const char* bases[] = {
-			"",
-			"C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Tools/MSVC/14.11.25503/bin/HostX64/x64/"
-		};
-
 		// link libraries
 		char link_directories[_SSR_ARGS_BUF_LEN];
 		_ssr_merge_in(link_directories, _SSR_ARGS_BUF_LEN, "", config->link_libraries, config->num_link_libraries);
@@ -945,9 +937,9 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		;
 
 		// vcvars - base - beg_args - default_flags - gen_dbg - target - _out - end_args - input
-		char* fmt = "%s && \"%slink.exe\" %s %s %s %s /OUT:\"%s\" %s \"%s\" %s";
+		char* fmt = "%s && link.exe %s %s %s %s /OUT:\"%s\" %s \"%s\" %s";
 
-		_ssr_str_t link = _ssr_str_f(fmt, vcvars, bases[config->target_arch], beg_args, default_flags, gen_dbg, target, _out, end_args, stages & _SSR_COMPILE ? compile_out.b : input, link_directories);
+		_ssr_str_t link = _ssr_str_f(fmt, vcvars, beg_args, default_flags, gen_dbg, target, _out, end_args, stages & _SSR_COMPILE ? compile_out.b : input, link_directories);
 		int ret = _ssr_run(link.b);
 		free(link.b);
 		if (ret != 0)
@@ -1037,7 +1029,7 @@ static bool _ssr_compile_gcc(const char* input, ssr_config_t* config, const char
 		const char* opt_lvl = config->flags & SSR_FLAGS_GEN_OPT2 ? "-O2" : (config->flags & SSR_FLAGS_GEN_OPT1 ? "-O1" : "");
 
 		char* fmt = "%s -c -o %s %s %s %s -o %s %s";
-		_ssr_str_t compile = _ssr_str_f(fmt, SSR_CLANG_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
+		_ssr_str_t compile = _ssr_str_f(fmt, SSR_GCC_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
 		int ret = _ssr_run(compile.b);
 		_ssr_str_destroy(compile);
 		if (ret != 0)
@@ -1051,7 +1043,7 @@ static bool _ssr_compile_gcc(const char* input, ssr_config_t* config, const char
 		_ssr_merge_in(link_directories, _SSR_ARGS_BUF_LEN, "/DEFAULTLIB", config->link_libraries, config->num_link_libraries);
 
 		char* fmt = "%s -shared -o %s %s";
-		_ssr_str_t link = _ssr_str_f(fmt, SSR_CLANG_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
+		_ssr_str_t link = _ssr_str_f(fmt, SSR_GCC_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
 		int ret = _ssr_run(link.b);
 		_ssr_str_destroy(link);
 		if (ret != 0)
@@ -1132,6 +1124,7 @@ SSR_DEF bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* 
 		ssr->config = (ssr_config_t*)malloc(sizeof(ssr_config_t));
 		ssr->config->compiler = SSR_COMPILER_MSVC;
 		ssr->config->msvc_ver = SSR_MSVC_VER_14_1;
+		ssr->config->msvc141_path = NULL;
 		ssr->config->target_arch = SSR_ARCH_X64;
 		ssr->config->flags = SSR_FLAGS_GEN_DEBUG;
 		ssr->config->include_directories = NULL;
@@ -1145,6 +1138,16 @@ SSR_DEF bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* 
 		ssr->config->link_args_beg = NULL;
 		ssr->config->link_args_end = NULL;
 		ssr->state |= 0x2;
+	}
+	else 
+	{
+		*ssr->config = *config;
+	}
+
+	if (ssr->config->compiler == SSR_COMPILER_MSVC && ssr->config->msvc_ver == SSR_MSVC_VER_14_1)
+	{
+		// TODO run vswhere
+		ssr->config->msvc141_path = "C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Auxiliary/Build/";
 	}
 
 	/* Syntax:
