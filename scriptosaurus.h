@@ -1,6 +1,5 @@
 // libc includes
 #include <stdlib.h>  
-#include <crtdbg.h>  
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,9 +8,6 @@
 #include <stdarg.h>
 #include <assert.h>
 #include <stdbool.h>
-
-#include <crtdbg.h>
-
 
 #ifndef _SSR_H_GUARD_
 #define _SSR_H_GUARD_
@@ -23,6 +19,8 @@
 #	else
 #		define SSR_32
 #	endif
+#elif defined(__linux__)
+#	define SSR_LINUX
 #else
 #	error
 #endif
@@ -238,7 +236,7 @@ static void _ssr_lock_destroy(struct _ssr_lock_t* lock);
 static void _ssr_lock_acq(struct _ssr_lock_t* lock);
 static void _ssr_lock_rel(struct _ssr_lock_t* lock);
 
-static void _ssr_thread(struct _ssr_thread_t* thread, void* fun, void* args);
+static bool _ssr_thread(struct _ssr_thread_t* thread, void* fun, void* args);
 static void _ssr_thread_join(struct _ssr_thread_t* thread);
 
 static const char*	_ssr_lib_ext(void);
@@ -289,14 +287,16 @@ static _ssr_str_t _ssr_str(const char* src)
 
 static _ssr_str_t _ssr_str_f(const char* fmt, ...)
 {
-	va_list args;
-	va_start(args, fmt);
-	size_t len = vsnprintf(NULL, 0, fmt, args);
-	_ssr_str_t ret;
-	ret.b = _ssr_alloc(len + 1);
-	vsnprintf(ret.b, len + 1, fmt, args);
-	va_end(args);
-	return ret;
+    // The code runs without va_copy on gcc and msvc
+    va_list args, args_cp;
+    va_start(args, fmt);
+    va_copy(args_cp, args);
+    size_t len = vsnprintf(NULL, 0, fmt, args);
+    _ssr_str_t ret;
+    ret.b = _ssr_alloc(len + 1);
+    vsnprintf(ret.b, len + 1, fmt, args_cp);
+    va_end(args);
+    return ret;
 }
 
 static _ssr_str_t _ssr_str_rnd(size_t len)
@@ -354,6 +354,7 @@ static void _ssr_vec_destroy(_ssr_vec_t* vec)
 
 static size_t _ssr_vec_len(_ssr_vec_t* vec)
 {
+	if (vec == NULL || vec->beg == NULL) return 0;
 	return (vec->cur - vec->beg) / vec->size;
 }
 
@@ -540,9 +541,10 @@ typedef struct _ssr_thread_t
 	unsigned int id;
 }_ssr_thread_t;
 
-static void _ssr_thread(struct _ssr_thread_t* thread, void* fun, void* args)
+static bool _ssr_thread(struct _ssr_thread_t* thread, void* fun, void* args)
 {
 	thread->handle = (HANDLE)_beginthreadex(NULL, 0, (_beginthreadex_proc_type)fun, args, 0, &thread->id);
+	return thread->handle != NULL;
 }
 
 static void _ssr_thread_join(struct _ssr_thread_t* thread)
@@ -610,102 +612,6 @@ static _ssr_str_t _ssr_fullpath(const char* rel)
 	return ret;
 }
 
-static _ssr_str_t _ssr_remove_ext(const char* str, long long len)
-{
-	if (len == -1)
-		len = strlen(str);
-	const char* cur = str + len - 1;
-	while (cur > str && *cur != '.')
-		--cur;
-	--cur;
-	_ssr_str_t ret;
-	size_t buf_len = cur - str + 1;
-	ret.b = (char*)malloc(buf_len + 1);
-	memcpy(ret.b, str, buf_len);
-	ret.b[buf_len] = '\0';
-	return ret;
-}
-
-// Returns a pointer in the same buffer that represents the relative path based on base.
-// base and path need to be full paths w/ driver letters in the same notation. 
-// path separators are not required to be the same
-static const char* _ssr_extract_rel(const char* base, const char* path)
-{
-	// let's be safe on the first comparisons
-	if (base == NULL || path == NULL || *base == '\0' || *path == '\0' || *(base+1) == '\0' || *(base+2) == '\0')
-		return NULL;
-
-	const char* b = base;
-	const char* p = path;
-
-	if (*(b + 1) == ':')
-	{
-		if (*(p + 1) == ':')
-		{
-			if (*b != *p)
-				return NULL;
-		}
-		else
-			return NULL;
-
-		b += 2;
-		p += 2;
-	}
-
-	while (true)
-	{
-		const char* sb = b;
-		const char* sp = p;
-
-		// Stopping at first path separator
-		while (*b != '\0' && *b != '/' && *b != '\\') ++b;
-		while (*p != '\0' && *p != '/' && *p != '\\') ++p;
-
-		// Comparing directory
-		if (b - sb != p - sp) return p;
-		if (memcmp(sb, sp, p - sp) != 0) return p;
-
-		// Skipping separators
-		while (*b != '\0' && *b == '/' || *b == '\\') ++b;
-		while (*p != '\0' && *p == '/' || *p == '\\') ++p;
-
-			if (*b == '\0') return p;
-		if (*p == '\0') return NULL; // the other way around
-	}
-	return NULL;
-}
-
-static const char* _ssr_extract_ext(const char* path)
-{
-	const char* cur = path + strlen(path);
-	while (*(--cur) != '.' && cur >= path);
-	return cur;
-}
-
-static _ssr_str_t _ssr_replace_seps(const char* str, char new_sep)
-{
-	size_t rel_path_len = strlen(str); // TODO: Can we avoid?
-    char* buffer = _ssr_alloc(rel_path_len + 1);
-	const char* read = str;
-	char* write = buffer;
-	while (*read != '\0')
-	{
-		if (*read == '\\' || *read == '/')
-		{
-			if (write > buffer && *(buffer - 1) != new_sep) // Avoiding double separator
-			{
-				*(write++) = new_sep;
-				++read;
-				continue;
-			}
-		}
-		*(write++) = *(read++);
-	}
-	*write = '\0';
-	_ssr_str_t no_ext_ret = _ssr_remove_ext(buffer, -1);
-	_ssr_free(buffer);
-	return no_ext_ret;
-}
 
 static void _ssr_iter_dir(const char* root, _ssr_iter_dir_cb_t cb, void* args)
 {
@@ -809,9 +715,264 @@ static int	_ssr_run(char* cmd)
 	return (int)ret_val;
 }
 
+#elif defined(SSR_LINUX)
+#include <pthread.h>
+#include <dlfcn.h>
+#include <unistd.h>
+#include <limits.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <dirent.h>
+
+typedef struct _ssr_lock_t
+{
+	pthread_mutex_t h;
+}_ssr_lock_t;
+
+static void _ssr_lock(struct _ssr_lock_t* lock)
+{
+	if (lock == NULL) return;
+	pthread_mutexattr_t attr;
+	pthread_mutexattr_init(&attr);
+	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+	pthread_mutex_init(&lock->h, &attr);
+}
+
+static void _ssr_lock_destroy(struct _ssr_lock_t* lock)
+{
+	if (lock == NULL) return;
+	pthread_mutex_destroy(&lock->h);
+}
+
+static void _ssr_lock_acq(struct _ssr_lock_t* lock)
+{
+	if (lock == NULL) return;
+	pthread_mutex_lock(&lock->h);
+}
+
+static void _ssr_lock_rel(struct _ssr_lock_t* lock)
+{
+	if (lock == NULL) return;
+	pthread_mutex_unlock(&lock->h);
+}
+
+typedef struct _ssr_thread_t
+{
+	pthread_t handle;
+}_ssr_thread_t;
+
+static bool _ssr_thread(struct _ssr_thread_t* thread, void* fun, void* args)
+{
+	typedef void* fun_t(void*);
+	if (thread == NULL || fun == NULL) return false;
+	if(pthread_create(&thread->handle, NULL, (fun_t*)fun, (void*)args))
+		return true;
+	return false;
+}
+
+static void _ssr_thread_join(struct _ssr_thread_t* thread)
+{
+	if (thread == NULL) return;
+	pthread_join(thread->handle, NULL);
+}
+
+typedef struct _ssr_lib_t
+{
+	void* h;
+}_ssr_lib_t;
+
+static const char*	_ssr_lib_ext(void)
+{
+	return "so";
+}
+
+static void _ssr_lib(struct _ssr_lib_t* lib, const char* path)
+{
+	if (lib == NULL || path == NULL) return;
+	lib->h = dlopen(path, RTLD_NOW);
+    const char* err = dlerror();
+}
+
+static void _ssr_lib_destroy(struct _ssr_lib_t* lib)
+{
+	if (lib == NULL || lib->h == NULL) return;
+	dlclose(lib->h);
+}
+
+static void* _ssr_lib_func_addr(struct _ssr_lib_t* lib, const char* fname)
+{
+	if (lib == NULL) return NULL;
+	return dlsym(lib->h, fname);
+}
+
+static _ssr_timestamp_t _ssr_file_timestamp(const char* path)
+{
+	struct stat s;
+	if (stat(path, &s) == -1)
+		return 0;
+
+	return s.st_mtime;
+}
+
+static bool _ssr_file_exists(const char* path)
+{
+	if (path == NULL) return false;
+	return access(path, R_OK) != -1;
+}
+
+static _ssr_str_t _ssr_fullpath(const char* rel)
+{
+	char fullpath[PATH_MAX+1];
+	if (realpath(rel, fullpath) == NULL) return _ssr_str_e();
+	return _ssr_str(fullpath);
+}
+
+static void _ssr_iter_dir(const char* root, _ssr_iter_dir_cb_t cb, void* args)
+{
+	DIR* dir;
+	dir = opendir(root);
+
+	struct dirent* de;
+	while ((de = readdir(dir)) != NULL)
+	{
+		if (de->d_type == DT_DIR)
+		{
+			if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+				continue;
+			char path[PATH_MAX+1];
+			snprintf(path, PATH_MAX+1, "%s/%s", root, de->d_name);
+			_ssr_iter_dir(path, cb, args);
+		}
+		else
+			cb(args, root, de->d_name);
+	}
+	closedir(dir);
+}
+
+static void _ssr_new_dir(const char* dir)
+{
+	if (dir == NULL) return;
+	if (mkdir(dir, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) == -1) return;
+}
+
+static void _ssr_sleep(unsigned int ms)
+{
+	usleep(ms * 1000);
+}
+
+static int	_ssr_run(char* cmd)
+{
+	int piperr[2]; //rw
+	int exit_code;
+
+    char buf[SSR_COMPILER_BUF];
+    FILE* pipe_out  = popen(cmd,  "r");
+    while ( fgets(buf, SSR_COMPILER_BUF, pipe_out) != NULL );
+    int ret = pclose(pipe_out);
+
+	return exit_code;
+}
+
 #else
-#	error No backend for this platform
+#	error
 #endif
+
+static _ssr_str_t _ssr_remove_ext(const char* str, long long len)
+{
+	if (len == -1)
+		len = strlen(str);
+	const char* cur = str + len - 1;
+	while (cur > str && *cur != '.')
+		--cur;
+	--cur;
+	_ssr_str_t ret;
+	size_t buf_len = cur - str + 1;
+	ret.b = (char*)malloc(buf_len + 1);
+	memcpy(ret.b, str, buf_len);
+	ret.b[buf_len] = '\0';
+	return ret;
+}
+
+// Returns a pointer in the same buffer that represents the relative path based on base.
+// base and path need to be full paths w/ driver letters in the same notation. 
+// path separators are not required to be the same
+static const char* _ssr_extract_rel(const char* base, const char* path)
+{
+	// let's be safe on the first comparisons
+	if (base == NULL || path == NULL || *base == '\0' || *path == '\0' || *(base+1) == '\0' || *(base+2) == '\0')
+		return NULL;
+
+	const char* b = base;
+	const char* p = path;
+
+	if (*(b + 1) == ':')
+	{
+		if (*(p + 1) == ':')
+		{
+			if (*b != *p)
+				return NULL;
+		}
+		else
+			return NULL;
+
+		b += 2;
+		p += 2;
+	}
+
+	while (true)
+	{
+		const char* sb = b;
+		const char* sp = p;
+
+		// Stopping at first path separator
+		while (*b != '\0' && *b != '/' && *b != '\\') ++b;
+		while (*p != '\0' && *p != '/' && *p != '\\') ++p;
+
+		// Comparing directory
+		if (b - sb != p - sp) return p;
+		if (memcmp(sb, sp, p - sp) != 0) return p;
+
+		// Skipping separators
+		while (*b != '\0' && *b == '/' || *b == '\\') ++b;
+		while (*p != '\0' && *p == '/' || *p == '\\') ++p;
+
+			if (*b == '\0') return p;
+		if (*p == '\0') return NULL; // the other way around
+	}
+	return NULL;
+}
+
+static const char* _ssr_extract_ext(const char* path)
+{
+	const char* cur = path + strlen(path);
+	while (*(--cur) != '.' && cur >= path);
+	return cur;
+}
+
+static _ssr_str_t _ssr_replace_seps(const char* str, char new_sep)
+{
+	size_t rel_path_len = strlen(str); // TODO: Can we avoid?
+    char* buffer = _ssr_alloc(rel_path_len + 1);
+	const char* read = str;
+	char* write = buffer;
+	while (*read != '\0')
+	{
+		if (*read == '\\' || *read == '/')
+		{
+			if (write > buffer && *(buffer - 1) != new_sep) // Avoiding double separator
+			{
+				*(write++) = new_sep;
+				++read;
+				continue;
+			}
+		}
+		*(write++) = *(read++);
+	}
+	*write = '\0';
+	_ssr_str_t no_ext_ret = _ssr_remove_ext(buffer, -1);
+	_ssr_free(buffer);
+	return no_ext_ret;
+}
 
 // Needed for live/not live
 enum _SSR_COMPILE_STAGES
@@ -852,7 +1013,7 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 	{
 		// Atleast from 15->17 installations paths are different
 
-		static const char* bases[] = {
+		const char* bases[] = {
 			config->msvc141_path,
 			"C:/Program Files (x86)/Microsoft Visual Studio 14.0/VC"
 		};
@@ -955,52 +1116,61 @@ end:
 #if !defined SSR_CLANG_EXEC
 #	define SSR_CLANG_EXEC "clang"
 #endif
-
 static bool _ssr_compile_clang(const char* input, ssr_config_t* config, const char* _out, int stages)
 {
-	bool ret = false;
-	_ssr_str_t compile_out = _ssr_str_e();
-	if (stages & _SSR_COMPILE)
-	{
-		compile_out = _ssr_str_f("%s.obj", _out);
+    bool ret = false;
+    _ssr_str_t compile_out = _ssr_str_e();
+    if (stages & _SSR_COMPILE)
+    {
+        compile_out = _ssr_str_f("%s.obj", _out);
 
-		// defines
-		char defines[_SSR_ARGS_BUF_LEN];
-		_ssr_merge_in(defines, _SSR_ARGS_BUF_LEN, "-D", config->defines, config->num_defines);
+        // defines
+        char defines[_SSR_ARGS_BUF_LEN];
+        _ssr_merge_in(defines, _SSR_ARGS_BUF_LEN, "-D", config->defines, config->num_defines);
 
-		// include directories
-		char include_directories[_SSR_ARGS_BUF_LEN];
-		_ssr_merge_in(include_directories, _SSR_ARGS_BUF_LEN, "-I", config->include_directories, config->num_include_directories);
+        // include directories
+        char include_directories[_SSR_ARGS_BUF_LEN];
+        _ssr_merge_in(include_directories, _SSR_ARGS_BUF_LEN, "-I", config->include_directories, config->num_include_directories);
 
-		const char* gen_dbg = config->flags & SSR_FLAGS_GEN_DEBUG ? "-g " : "";
-		const char* opt_lvl = config->flags & SSR_FLAGS_GEN_OPT2 ? "-O2" : (config->flags & SSR_FLAGS_GEN_OPT1 ? "-O1" : ""); // Are they actually the same as gcc?
+        const char* gen_dbg = config->flags & SSR_FLAGS_GEN_DEBUG ? "-g " : "";
+        const char* opt_lvl = config->flags & SSR_FLAGS_GEN_OPT2 ? "-O2" : (config->flags & SSR_FLAGS_GEN_OPT1 ? "-O1" : ""); // Are they actually the same as gcc?
 
-		char* fmt = "%s -c -o %s %s %s %s -o\"%s\" %s";
-		_ssr_str_t compile = _ssr_str_f(fmt, SSR_CLANG_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
-		int ret = _ssr_run(compile.b);
-		_ssr_str_destroy(compile);
-		if (ret != 0)
-			goto end;
-	}
+#if defined(SSR_LINUX)
+        char* fmt = "%s -c -fPIC -o %s %s %s %s -o%s %s 2>&1";
+#else
+        char* fmt = "%s -c -fPIC -o %s %s %s %s -o%s %s";
+#endif
 
-	if (stages & _SSR_LINK)
-	{
-		// link libraries
-		char link_directories[_SSR_ARGS_BUF_LEN];
-		_ssr_merge_in(link_directories, _SSR_ARGS_BUF_LEN, "/DEFAULTLIB", config->link_libraries, config->num_link_libraries);
+        _ssr_str_t compile = _ssr_str_f(fmt, SSR_CLANG_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
+        int ret = _ssr_run(compile.b);
+        _ssr_str_destroy(compile);
+        if (ret != 0)
+            goto end;
+    }
 
-		char* fmt = "%s -shared -o \"%s\" %s";
-		_ssr_str_t link = _ssr_str_f(fmt, SSR_CLANG_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
-		int ret = _ssr_run(link.b);
-		_ssr_str_destroy(link);
-		if (ret != 0)
-			goto end;
-	}
+    if (stages & _SSR_LINK)
+    {
+        // link libraries
+        char link_directories[_SSR_ARGS_BUF_LEN];
+        _ssr_merge_in(link_directories, _SSR_ARGS_BUF_LEN, "/DEFAULTLIB", config->link_libraries, config->num_link_libraries);
 
-	ret = true;
-end:
-	_ssr_str_destroy(compile_out);
-	return ret;
+#if defined(SSR_LINUX)
+        char* fmt = "%s -shared -lm -o %s %s 2>&1";
+#else
+        char* fmt = "%s -shared -lm -o %s %s";
+#endif
+
+        _ssr_str_t link = _ssr_str_f(fmt, SSR_CLANG_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
+        int ret = _ssr_run(link.b);
+        _ssr_str_destroy(link);
+        if (ret != 0)
+            goto end;
+    }
+
+    ret = true;
+    end:
+    _ssr_str_destroy(compile_out);
+    return ret;
 }
 
 #if !defined SSR_GCC_EXEC
@@ -1009,49 +1179,59 @@ end:
 
 static bool _ssr_compile_gcc(const char* input, ssr_config_t* config, const char* _out, int stages)
 {
-	bool ret = false;
-	_ssr_str_t compile_out = _ssr_str_e();
-	if (stages & _SSR_COMPILE)
-	{
-		compile_out = _ssr_str_f("%s.obj", _out);
+    bool ret = false;
+    _ssr_str_t compile_out = _ssr_str_e();
+    if (stages & _SSR_COMPILE)
+    {
+        compile_out = _ssr_str_f("%s.obj", _out);
 
-		// defines
-		char defines[_SSR_ARGS_BUF_LEN];
-		_ssr_merge_in(defines, _SSR_ARGS_BUF_LEN, "-D", config->defines, config->num_defines);
+        // defines
+        char defines[_SSR_ARGS_BUF_LEN];
+        _ssr_merge_in(defines, _SSR_ARGS_BUF_LEN, "-D", config->defines, config->num_defines);
 
-		// include directories
-		char include_directories[_SSR_ARGS_BUF_LEN];
-		_ssr_merge_in(include_directories, _SSR_ARGS_BUF_LEN, "-I", config->include_directories, config->num_include_directories);
+        // include directories
+        char include_directories[_SSR_ARGS_BUF_LEN];
+        _ssr_merge_in(include_directories, _SSR_ARGS_BUF_LEN, "-I", config->include_directories, config->num_include_directories);
 
-		const char* gen_dbg = config->flags & SSR_FLAGS_GEN_DEBUG ? "-g " : "";
-		const char* opt_lvl = config->flags & SSR_FLAGS_GEN_OPT2 ? "-O2" : (config->flags & SSR_FLAGS_GEN_OPT1 ? "-O1" : "");
+        const char* gen_dbg = config->flags & SSR_FLAGS_GEN_DEBUG ? "-g " : "";
+        const char* opt_lvl = config->flags & SSR_FLAGS_GEN_OPT2 ? "-O2" : (config->flags & SSR_FLAGS_GEN_OPT1 ? "-O1" : "");
 
-		char* fmt = "%s -c -o %s %s %s %s -o %s %s";
-		_ssr_str_t compile = _ssr_str_f(fmt, SSR_GCC_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
-		int ret = _ssr_run(compile.b);
-		_ssr_str_destroy(compile);
-		if (ret != 0)
-			goto end;
-	}
+#if defined(SSR_LINUX)
+        char* fmt = "%s -c -o %s %s %s %s -o %s %s 2>&1";
+#else
+        char* fmt = "%s -c -o %s %s %s %s -o %s %s";
+#endif
 
-	if (stages & _SSR_LINK)
-	{
-		// link libraries
-		char link_directories[_SSR_ARGS_BUF_LEN];
-		_ssr_merge_in(link_directories, _SSR_ARGS_BUF_LEN, "/DEFAULTLIB", config->link_libraries, config->num_link_libraries);
+        _ssr_str_t compile = _ssr_str_f(fmt, SSR_CLANG_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
+        int ret = _ssr_run(compile.b);
+        _ssr_str_destroy(compile);
+        if (ret != 0)
+            goto end;
+    }
 
-		char* fmt = "%s -shared -o %s %s";
-		_ssr_str_t link = _ssr_str_f(fmt, SSR_GCC_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
-		int ret = _ssr_run(link.b);
-		_ssr_str_destroy(link);
-		if (ret != 0)
-			goto end;
-	}
+    if (stages & _SSR_LINK)
+    {
+        // link libraries
+        char link_directories[_SSR_ARGS_BUF_LEN];
+        _ssr_merge_in(link_directories, _SSR_ARGS_BUF_LEN, "/DEFAULTLIB", config->link_libraries, config->num_link_libraries);
 
-	ret = true;
-end:
-	_ssr_str_destroy(compile_out);
-	return ret;
+#if defined(SSR_LINUX)
+        char* fmt = "%s -shared -o %s %s 2>&1";
+#else
+        char* fmt = "%s -shared -o %s %s";
+#endif
+
+        _ssr_str_t link = _ssr_str_f(fmt, SSR_CLANG_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
+        int ret = _ssr_run(link.b);
+        _ssr_str_destroy(link);
+        if (ret != 0)
+            goto end;
+    }
+
+    ret = true;
+    end:
+    _ssr_str_destroy(compile_out);
+    return ret;
 }
 
 static bool _ssr_compile(const char* path, ssr_config_t* config, const char* out, int stages)
@@ -1120,7 +1300,7 @@ SSR_DEF bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* 
 	if (config == NULL)
 	{
 		ssr->config = (ssr_config_t*)malloc(sizeof(ssr_config_t));
-		ssr->config->compiler = SSR_COMPILER_MSVC;
+		ssr->config->compiler = SSR_COMPILER_CLANG;
 		ssr->config->msvc_ver = SSR_MSVC_VER_14_1;
 		ssr->config->msvc141_path = NULL;
 		ssr->config->target_arch = SSR_ARCH_X64;
@@ -1200,7 +1380,7 @@ SSR_DEF void ssr_destroy(struct ssr_t* ssr)
 #ifdef SSR_LIVE
 	_ssr_map_iter(&ssr->scripts, _ssr_script_destroy, NULL);
 	_ssr_map_destroy(&ssr->scripts);
-#else SSR_LIVE
+#else
 	_ssr_lib_destroy(&ssr->lib);
 #endif
 }
@@ -1225,10 +1405,10 @@ static void _ssr_on_file(void* args, const char* base, const char* filename)
 	}
 
 	// In case skipping file
-    if (exts[exti] == '\0') {
-        _ssr_str_destroy(full_path);
-        return;
-    }
+	if (exts[exti][0] == '\0') {
+		_ssr_str_destroy(full_path);
+		return;
+	}
 
 	// Computing script id
 	// |root|rel_path|filename
@@ -1332,6 +1512,8 @@ end:
 //@main
 #ifdef _WIN32 // && _MSC_VER
 static DWORD WINAPI 
+#else
+static void*
 #endif
 _ssr_main(void* args)
 {
@@ -1342,7 +1524,7 @@ _ssr_main(void* args)
 
 	// Setting up logging for current instance
 	_ssr_log(0, NULL, ssr);
-	_ssr_log(SSR_CB_INFO, "Watcher running on %s", ssr->root);
+    //_ssr_log(SSR_CB_INFO, "Watcher running on %s", ssr->root);
 	
 	// Removing current bin directory
 	_ssr_new_dir(bin_dir.b);
@@ -1368,8 +1550,7 @@ static void _ssr_add_file_cb(void* args, const char* base, const char* filename)
 SSR_DEF bool ssr_run(struct ssr_t* ssr)
 {
 #ifdef SSR_LIVE
-	_ssr_thread(&ssr->thread, (void*)_ssr_main, ssr);
-	if (ssr->thread.handle == NULL)
+	if (_ssr_thread(&ssr->thread, (void*)_ssr_main, ssr))
 	{
 		// ERROR: Failed to launch thread
 		return false;

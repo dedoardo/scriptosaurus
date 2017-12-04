@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.2 FATAL_ERROR)
-project(Scriptosaurus_example VERSION 1.0 LANGUAGES CXX)
-add_executable(Scriptosaurus_example ../scriptosaurus.h source.cpp)
+project(Scriptosaurus_example VERSION 1.0 LANGUAGES C)
+add_executable(Scriptosaurus_example ../scriptosaurus.h source.c)
 target_compile_definitions(Scriptosaurus_example PUBLIC _CRT_SECURE_NO_WARNINGS)
+target_link_libraries(Scriptosaurus_example PUBLIC pthread dl)
 set_target_properties(Scriptosaurus_example PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")

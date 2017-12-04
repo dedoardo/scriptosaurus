@@ -1,7 +1,4 @@
-#define _CRTDBG_MAP_ALLOC
 #include <stdlib.h>
-#include <crtdbg.h>
-#include <conio.h>
 
 #define SSR_LIVE
 #define SSR_IMPLEMENTATION
@@ -32,7 +29,7 @@ int main()
 
 	// !!! SET YOUR PATH HERE
 	// Doesn't necessarily have to be global, just make sure it's relative to your working directory
-	ssr_init(&ssr, "C:/Code/scriptosaurus/example/scripts", NULL);
+	ssr_init(&ssr, "scripts", NULL);
 	
 	ssr_cb(&ssr, SSR_CB_ERR | SSR_CB_WARN | SSR_CB_INFO, msg_callback); 
 
@@ -60,6 +57,5 @@ int main()
 	}
 
 	ssr_destroy(&ssr);
-	printf("%d\n", _CrtDumpMemoryLeaks());
  	return EXIT_SUCCESS;
 }
