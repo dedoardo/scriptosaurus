@@ -1,3 +1,6 @@
+#ifndef _SSR_H_GUARD_
+#define _SSR_H_GUARD_
+
 // libc includes
 #include <stdlib.h>  
 #include <stdint.h>
@@ -8,9 +11,6 @@
 #include <stdarg.h>
 #include <assert.h>
 #include <stdbool.h>
-
-#ifndef _SSR_H_GUARD_
-#define _SSR_H_GUARD_
 
 #ifdef _WIN32
 #	define SSR_WIN
