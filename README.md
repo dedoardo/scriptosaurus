@@ -1,205 +1,130 @@
-# Scriptosaurus - Single-Header C++ Live Scripting ( MIT License ) 
+# Scriptosaurus - Single-Header C Live Scripting 
 
-* **Must Read**
-* **Basic Usage** 
-* **Supported Platforms**
-* **Advanced Usage**
-  * **x86/x64**
-  * **Scripting metadata**
-  * **Subdirectories**
-  * **Preprocessor directives**
-  * **Logging**
-  * **Porting**
-* **Planned features / Wish list**
-* **Features / How it works**
+### Introduction
+Scriptosaurus is a single-header C hot-reloading library. It's an end-to-end solution that runs a daemon on the specified user directory, recompiles the code on changes and hot-swaps the shared library replacing registered function pointers. 
+Scripts are individual `*.c` source files that get compiled to a single shared library and can export multiple functions. If a script is located in `foo/bar.c` it is referenced to as `foo$bar` (path separators are replaced by `$`) from the application side. 
+If hot-reloading is not enabled (by **not** defining `SSR_LIVE`) the library will run in **Release** mode, compiling all the scripts into a single shared library with zero-overhead at runtime.
 
-### Must read
 
-Currently this is very unstable. It is being used for another project and thus will hopefully receive tons of testing and bug-fixing in the near future, as well as more portings to other compilers / platforms.
+## Example
+```
+<project-dir>/
+    main.c
+    scripts/
+        foo/
+            bar.c
+```
 
-Parts of the README are yet to be completed mostly because the code is very subject to change. Planned Features contains the things I'm currently working on.
+`main.c`
 
-P.S. I lied, there are 2 headers, one for the caller and one for the callee ( script ).
+```c
+#define SSR_LIVE 	// Live editing
+#define SSR_IMPLEMENTATION // Platform
+#include "scriptosaurus.h" // Single header
 
-### Basic Usage
-
-`main.cpp`
-
-```c++
-#define scriptosaurus_live 	// Live editing
-#define scriptosaurus_win32 // Platform
-#define scriptosaurus_msvc "C:/Program Files (x86)/Microsoft Visual Studio 14.0/VC/bin" 
-// ^ Fell free to change it depending on the architecture you are compiling for
-#include "scriptosaurus.hpp" // Single header
-
-// The base class only makes sure you assign an immutable name
-struct SampleScript : public scriptosaurus::Script
-{
-	SampleScript() : Script("SampleScript") { } 
-  
-  	// Declares a swappable routine
-	scriptosaurus_routine(sample_callback);
-};
+typedef int(*fun_t)(int);
 
 void main()
 {
-	using namespace scriptosaurus;
-  
-  	// Handles script's reloading
-	ScriptDaemon daemon("scripts"); // << Root directory
-  
-  	// Your script instance
-	SampleScript s1;
-	daemon.add(s1, { 
-		scriptosaurus_prepare(s1, sample_callback)
-	});
-
-  	// Launches daemon
-	daemon.link_all();
+    fun_t my_fun;
+    ssr_t ssr;
+    ssr_init(&ssr, "scripts", NULL);
+    
+    // Always call run before any other ssr_add
+	ssr_run(&ssr);
 	
-	while (true) 
-	{
-		scriptosaurus_call(s1, sample_callback, nullptr);
-	}
+    // Links 
+    ssr_add(&ssr, "foo$bar", "my_script_fun", &my_fun);
+    
+    // ...
+    // If the content of scripts/foo/bar.c, it will be recompiled
+    // and my_fun updated accordingly
 }
 ```
 
-`scripts/SampleScript.cpp`
+`scripts/foo/bar.c`
+```
+#define SSR_SCRIPT
+#include "scriptosaurus.h"
 
-```c++
-/*
-	:scriptosaurus
-	debug: true
-	:end
-*/
-
-#include <iostream>
-#include "../scriptsaurus_routines.hpp"
-
-script_routine(sample_callback)
+ssr_fun(int, my_script_fun)(int v)
 {
-	std::cout << "b";
+    return i  * 2;
 }
 ```
 
-**What is all of the above?**
+## API
 
-`scriptosaurus_routine` Declares a routine whose pointer can be swapped at runtime.
+**`ssr_t`** Library object, each instance works on a single directory. Multiple are supported.
+```c
+typedef struct _ssr_t { } ssr_t; 
+``` 
 
-`scriptosaurus_prepare` Saves a pointer to the specified function
-
-`scriptosaurus_call` When not testing ( `undefined scriptosaurus_live` ) simply calls the function, otherwise performs operations to ensure that the function has been correctly loaded by the system and that is not in use by it.
-
-`daemon.link_all` When not testing ( `undefined scriptosaurus_live` ) creates a dynamic library containing all the symbols ( manually mangled to avoid multiple references ), otherwise simply launches the daemon thread.
-
-**Note**: If you want more information just browse `scriptosaurus.hpp`.
-
-### Supported platforms
-
-List of supported or to be supported platforms / compilers for the immediate future.
-
-| Backend    | Supported | Planned? |
-| ---------- | :-------: | :------: |
-| Win32      |    Yes    |          |
-| Posix      |    No     |   Yes    |
-| MSVC2015   |   Yes*    |   Done   |
-| MSVC2013   |    No     |   No**   |
-| Clang (CL) |    Yes    |   Done   |
-| GCC??      |    No     |    No    |
-
-- `*`  Visual studio 2015 keeps `.pdb` pinned down even if `FreeLibrary` is called , thus if you want to enable live scripting you have to check `Tools > Options > Debugging > General > Use Native Compatibility Mode` . This will use an old debugging engine where some preview features are unfortunately not supported. 
-- `**` Visual studio 2013 hasn't been tested yet, if you want to know if it works you should: 
-  - See if all C++11+ features are supported
-  - Find a way to use the native debugging engine if you want the live scripting
-
-Adding a compiler backend is extremely simple as it's a matter of creating the command and calling execute on it. All the parameters are already provided.
-
-### Advanced Usage
-
-#### x64/x86 
-
-By default `scriptosaurus` is 32-bit and you should define the compiler paths accordingly. 
-
+**`ssr_init()`** Initializes the library and launches the daemon (if `SSR_LIVE` is defined)
+```c
+bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* config)
 ```
-#define scriptosaurus_msvc "<path-to-32bit-msvc-compiler>"
-#include <scriptosaurus.hpp>
+```
+Arguments:
+    - ssr: Library object
+    - root: Relative of absolute path of the directory to be searched for scripts
+    - config: Compiler options, see ssr_config_t for more information
+Returns:
+    True if initialization was successful, false otherwise 
 ```
 
+**`ssr_add`** Registers a function for hot-reloading.
+```c
+bool ssr_add(struct ssr_t* srr, const char* script_id, const char* fun_name, ssr_func_t* user_routine)
 ```
-#define scriptosaurus_64bit
-#define scriptosaurus_msvc "<path-to-64bit-msvc-compiler>"
-#include <scriptosaurus.hpp>
 ```
+Arguments:
+    - ssr: Library object
+    - script_id: Unique script identifier relative to root directory as specified in ssr_init(). Path separators are replaced by '$'.
+    - fun_name: Name of the function exported by the script
+    - user_routine: Pointer to function pointer which is to be registered for hot-reloading. Remember to cast it to the correct function type before loading
 
-You can specify `scriptosaurus_32bit` if you want, but it's optional.
-
-**Note**: Remember to make sure that the binary's architecture matches the `scriptosaurus`' one. 
-
-**Note**:Currently there is no "clear" API for cross-compiling, will work on that soon.
-
-#### Scripting Metadata
-
-Currently only able to produce debug symbols, will be extended soon to allow for including/linking.
-
-Just put this wherever you want in the c++ code, only the first block is currently parsed.
-
-```
-scriptosaurus:
-debug:[true|false]
-end:
+Returns:
+    True if registering was successful and the function pointer will be updated, false otherwise.
 ```
 
+**`ssr_remove`** Unregisters a function previously registered with `ssr_add`
+```c
+void ssr_remove(struct ssr_t* ssr, const char* script_id, const char* fun_name, ssr_func_t* user_routine)
+```
+```
+Arguments:
+    - ssr: Library object
+    - script_id: Unique script identifier relative to root directory as specified in ssr_init(). Path separators are replaced by '$'.
+    - fun_name: Name of the function user_routine refers to.
+    - user_routine: Address of function pointer previously registered for listening.
+```
 
-
-#### Subdirectories
-
-You can nest scripts inside the root directory. When referring to them via the `c++` code simply substitute the path separator (`/` `\\`) with `@` ( See Preprocessor directives to change it ).
+Compiler and related options can be controlled by `ssr_config_t`. By default the client's configuration is used.
 
 ```c
-scripts/ <= Root directory
-	ScriptA.cpp
-	sub1/	<= Sub directory 1
-		ScriptA.cpp
-	sub2/   <= Sub directory 2
-		ScriptA.cpp
-		sub3/ <= Sub directory 3
-			ScriptA.cpp
+typedef struct ssr_config_t
+{
+	int compiler; // SSR_COMPILER
+	int msvc_ver; // SSR_MSVC_VER
+	int target_arch; // SSR_ARCH
+	int flags; // SSR_FLAGS
+	char* compile_args_beg; // added before any other flag
+	char* compile_args_end; // added before input files
+	char* link_args_beg; // added before any other flag
+	char* link_args_end; // added before input files
+	char** include_directories; // compiler include directories
+	char** link_libraries; // libraries to link to - absolute paths
+	char** defines; // name=value strings
+	size_t num_include_directories;
+	size_t num_link_libraries;
+	size_t num_defines;
+}ssr_config_t;
 ```
 
-You can refer to the scripts in the following way. **Note** how the extension is not specified in the ID.
+**Note**: For more info please browse `scriptosaurus.h`
 
-```
-Script("ScriptA")
-Script("sub1@ScriptA")
-Script("sub2@ScriptA")
-Script("sub2@sub3@ScriptA")
-```
+## Supported platforms
 
-#### Preprocessor directives 
-
-TODO
-
-#### Logging
-
-TODO
-
-#### Porting
-
-TODO
-
-### Planned Features
-
-- Extended metadata API ( Basic compiler/linker arguments )
-- Multiple script instances
-- Catch dem exceptions
-- Proper string wrapper that handles `path` +`basename` + `extension`.  Performance is not critical and a nice immutable interface would be nice.
-- Ensure same calling convention
-- Properly redirect compiler output
-- Ensure that target architecture is the same as the one the executable is being compiled with.
-- Cross-compilation
-- Reduce clutter generated by linking/compiling
-- C++ STL is literally abused especially string, might reduce it's usage when implementing the wrapper.
-
-### How it works
-
-TODO
+**Backends**: Win32, Posix
+**Compilers**: gcc, clang, msvc
