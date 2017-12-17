@@ -21,6 +21,11 @@
 #	endif
 #elif defined(__linux__)
 #	define SSR_LINUX
+#	ifdef __x86_64__
+#		define SSR_64
+#	else
+#		define SSR_32
+#	endif
 #else
 #	error
 #endif
@@ -85,7 +90,9 @@ enum SSR_COMPILER
 
 enum SSR_MSVC_VER
 {
-	SSR_MSVC_VER_14_1 // Visual Studio 2017
+	SSR_MSVC_VER_14_1, // Visual Studio 2017
+	SSR_MSVC_VER_14_0, // Visual Studio 2015
+	// .. Older MSVC versions should work out of the box
 };
 
 enum SSR_ARCH
@@ -240,7 +247,7 @@ static bool _ssr_thread(struct _ssr_thread_t* thread, void* fun, void* args);
 static void _ssr_thread_join(struct _ssr_thread_t* thread);
 
 static const char*	_ssr_lib_ext(void);
-static void		    _ssr_lib(struct _ssr_lib_t* lib, const char* path);
+static bool		    _ssr_lib(struct _ssr_lib_t* lib, const char* path);
 static void			_ssr_lib_destroy(struct _ssr_lib_t* lib);
 static void*		_ssr_lib_func_addr(struct _ssr_lib_t* lib, const char* fname);
 
@@ -566,9 +573,16 @@ static const char*	_ssr_lib_ext(void)
 	return "dll";
 }
 
-static void _ssr_lib(struct _ssr_lib_t* lib, const char* path)
+static bool _ssr_lib(struct _ssr_lib_t* lib, const char* path)
 {
 	lib->h = LoadLibraryA(path);
+	if (lib->h == NULL)
+	{
+		_ssr_log(SSR_CB_ERR, "Error loading shared library: %s", path);
+		return false;
+	}
+
+	return true;
 }
 
 static void _ssr_lib_destroy(struct _ssr_lib_t* lib)
@@ -786,11 +800,17 @@ static const char*	_ssr_lib_ext(void)
 	return "so";
 }
 
-static void _ssr_lib(struct _ssr_lib_t* lib, const char* path)
+static bool _ssr_lib(struct _ssr_lib_t* lib, const char* path)
 {
-	if (lib == NULL || path == NULL) return;
+	if (lib == NULL || path == NULL) return false;
 	lib->h = dlopen(path, RTLD_NOW);
-    const char* err = dlerror();
+	if (lib->h == NULL)
+	{
+		const char* err = dlerror();
+		_ssr_log(SSR_CB_WARN, "%s", err);
+		return false;
+	}
+	return true;
 }
 
 static void _ssr_lib_destroy(struct _ssr_lib_t* lib)
@@ -862,15 +882,38 @@ static void _ssr_sleep(unsigned int ms)
 
 static int	_ssr_run(char* cmd)
 {
-	int piperr[2]; //rw
-	int exit_code;
+    char buf[SSR_COMPILER_BUF+3];
+	memset(buf, 0, SSR_COMPILER_BUF+3);
 
-    char buf[SSR_COMPILER_BUF];
     FILE* pipe_out  = popen(cmd,  "r");
-    while ( fgets(buf, SSR_COMPILER_BUF, pipe_out) != NULL );
-    int ret = pclose(pipe_out);
+	if (pipe_out == NULL)
+	{
+		// TODO: Error
+		return 1;
+	}
 
-	return exit_code;
+    while ( fgets(buf, SSR_COMPILER_BUF, pipe_out) != NULL );
+    int ret_code = pclose(pipe_out);
+
+	if (WIFEXITED(ret_code))
+		ret_code = 0;
+	else
+		ret_code = WEXITSTATUS(ret_code);
+
+	char* cur = buf;
+	while (*cur != '\0' || *(cur+1) != '\0' || (*(cur+2) != '\0'))
+	{
+		if (*cur == '\0') *cur = ' ';
+		++cur;
+	}
+
+	if (ret_code != 0 && buf[0] == '\0')
+		_ssr_log(SSR_CB_ERR, "Failed to execute command %s with error %d", cmd, ret_code);
+	else if (ret_code != 0)
+		_ssr_log(SSR_CB_ERR, "%s", buf);
+	else if (buf[0] != '\0')
+		_ssr_log(SSR_CB_WARN, "%s", buf);
+	return ret_code;
 }
 
 #else
@@ -1136,7 +1179,7 @@ static bool _ssr_compile_clang(const char* input, ssr_config_t* config, const ch
         const char* opt_lvl = config->flags & SSR_FLAGS_GEN_OPT2 ? "-O2" : (config->flags & SSR_FLAGS_GEN_OPT1 ? "-O1" : ""); // Are they actually the same as gcc?
 
 #if defined(SSR_LINUX)
-        char* fmt = "%s -c -fPIC -o %s %s %s %s -o%s %s 2>&1";
+        char* fmt = "%s -c -fPIC -o %s %s %s %s -o%s %s -lm 2>&1";
 #else
         char* fmt = "%s -c -fPIC -o %s %s %s %s -o%s %s";
 #endif
@@ -1155,7 +1198,7 @@ static bool _ssr_compile_clang(const char* input, ssr_config_t* config, const ch
         _ssr_merge_in(link_directories, _SSR_ARGS_BUF_LEN, "/DEFAULTLIB", config->link_libraries, config->num_link_libraries);
 
 #if defined(SSR_LINUX)
-        char* fmt = "%s -shared -lm -o %s %s 2>&1";
+        char* fmt = "%s -shared -lm -o %s %s -lm 2>&1";
 #else
         char* fmt = "%s -shared -lm -o %s %s";
 #endif
@@ -1197,12 +1240,12 @@ static bool _ssr_compile_gcc(const char* input, ssr_config_t* config, const char
         const char* opt_lvl = config->flags & SSR_FLAGS_GEN_OPT2 ? "-O2" : (config->flags & SSR_FLAGS_GEN_OPT1 ? "-O1" : "");
 
 #if defined(SSR_LINUX)
-        char* fmt = "%s -c -o %s %s %s %s -o %s %s 2>&1";
+        char* fmt = "%s -c -o %s %s %s %s -o %s %s -lm 2>&1";
 #else
         char* fmt = "%s -c -o %s %s %s %s -o %s %s";
 #endif
 
-        _ssr_str_t compile = _ssr_str_f(fmt, SSR_CLANG_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
+        _ssr_str_t compile = _ssr_str_f(fmt, SSR_GCC_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
         int ret = _ssr_run(compile.b);
         _ssr_str_destroy(compile);
         if (ret != 0)
@@ -1216,12 +1259,12 @@ static bool _ssr_compile_gcc(const char* input, ssr_config_t* config, const char
         _ssr_merge_in(link_directories, _SSR_ARGS_BUF_LEN, "/DEFAULTLIB", config->link_libraries, config->num_link_libraries);
 
 #if defined(SSR_LINUX)
-        char* fmt = "%s -shared -o %s %s 2>&1";
+        char* fmt = "%s -shared -o %s %s -lm 2>&1";
 #else
         char* fmt = "%s -shared -o %s %s";
 #endif
 
-        _ssr_str_t link = _ssr_str_f(fmt, SSR_CLANG_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
+        _ssr_str_t link = _ssr_str_f(fmt, SSR_GCC_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
         int ret = _ssr_run(link.b);
         _ssr_str_destroy(link);
         if (ret != 0)
@@ -1300,457 +1343,482 @@ SSR_DEF bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* 
 	if (config == NULL)
 	{
 		ssr->config = (ssr_config_t*)malloc(sizeof(ssr_config_t));
-		ssr->config->compiler = SSR_COMPILER_MSVC;
-		ssr->config->msvc_ver = SSR_MSVC_VER_14_1;
+#if defined(__clang__)
+		ssr->config->compiler = SSR_COMPILER_CLANG;
+#elif defined(__GNUC__) || defined(__GNUG__)
+		ssr->config->compiler = SSR_COMPILER_GCC;
+#elif defined(_MSC_VER)
+#	if _MSC_VER >= 1910
 		ssr->config->msvc141_path = NULL;
+		ssr->config->compiler = SSR_COMPILER_MSVC_14_1;
+#	elif _MSC_VER >= 1900
+        ssr->config->compiler = SSR_COMPILER_MSVC_14_0;
+#	else
+#		error Previous MSVC versions have not been tested, but should probably work with the right paths
+#	endif
+#else
+#	error Unsupported compiler
+#endif
+
+#if defined(SSR_32)
 		ssr->config->target_arch = SSR_ARCH_X86;
-		ssr->config->flags = SSR_FLAGS_GEN_DEBUG;
-		ssr->config->include_directories = NULL;
-		ssr->config->num_include_directories = 0;
-		ssr->config->link_libraries = NULL;
-		ssr->config->num_link_libraries = 0;
-		ssr->config->defines = NULL;
-		ssr->config->num_defines = 0;
-		ssr->config->compile_args_beg = NULL;
-		ssr->config->compile_args_end = NULL;
-		ssr->config->link_args_beg = NULL;
-		ssr->config->link_args_end = NULL;
-		ssr->state |= 0x2;
-	}
-	else 
-	{
-		*ssr->config = *config;
-	}
+#elif defined(SSR_64)
+		ssr->config->target_arch = SSR_ARCH_X86;
+#else
+#	error Unrecognized platform
+#endif
+        ssr->config->flags = SSR_FLAGS_GEN_DEBUG;
+        ssr->config->include_directories = NULL;
+        ssr->config->num_include_directories = 0;
+        ssr->config->link_libraries = NULL;
+        ssr->config->num_link_libraries = 0;
+        ssr->config->defines = NULL;
+        ssr->config->num_defines = 0;
+        ssr->config->compile_args_beg = NULL;
+        ssr->config->compile_args_end = NULL;
+        ssr->config->link_args_beg = NULL;
+        ssr->config->link_args_end = NULL;
+        ssr->state |= 0x2;
+    }
+    else
+    {
+        *ssr->config = *config;
+    }
 
-	if (ssr->config->compiler == SSR_COMPILER_MSVC && ssr->config->msvc_ver == SSR_MSVC_VER_14_1)
-	{
-		// TODO run vswhere
-		ssr->config->msvc141_path = "C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Auxiliary/Build/";
-	}
+    if (ssr->config->compiler == SSR_COMPILER_MSVC && ssr->config->msvc_ver == SSR_MSVC_VER_14_1)
+    {
+        // TODO run vswhere
+        ssr->config->msvc141_path = "C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Auxiliary/Build/";
+    }
 
-	/* Syntax:
-		<filter>:[L]
-		<command>:<value>
-		..
-		EOF
-		<filter> can be either a single file (relative from root) or a directory, no support for globbing here
-		e.g. math/incr math/incr/
-		L specifies if the commands are valid only when in live mode
-		<command>:<value> represents a compile option in cmake style (w/o the target_):
-		include_directories <path> [,<path>]
-		link_directories <path> [,<path>]
-		link_libraries <libname> [,<libname>]
-		add_definitions <name>=<value> [,<name>=<value>]*
-		[clang|msvc|gcc]:<arg>
-	*/
-	return true;
+    /* Syntax:
+        <filter>:[L]
+        <command>:<value>
+        ..
+        EOF
+        <filter> can be either a single file (relative from root) or a directory, no support for globbing here
+        e.g. math/incr math/incr/
+        L specifies if the commands are valid only when in live mode
+        <command>:<value> represents a compile option in cmake style (w/o the target_):
+        include_directories <path> [,<path>]
+        link_directories <path> [,<path>]
+        link_libraries <libname> [,<libname>]
+        add_definitions <name>=<value> [,<name>=<value>]*
+        [clang|msvc|gcc]:<arg>
+    */
+    return true;
 
 }
 
 static void _ssr_script_destroy(void* el, void* args)
 {
-	_ssr_script_t* script = (_ssr_script_t*)el;
-	
-	size_t routines_len = _ssr_vec_len(&script->routines);
-	for (size_t i = 0; i < routines_len; ++i)
-	{
-		_ssr_routine_t* routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, i);
-		_ssr_str_destroy(routine->name);
-		_ssr_vec_destroy(&routine->moos);
-		_ssr_lock_destroy(&routine->moos_lock);
-	}
+    _ssr_script_t* script = (_ssr_script_t*)el;
 
-	_ssr_vec_destroy(&script->routines);
-	_ssr_str_destroy(script->id);
-	_ssr_str_destroy(script->rnd_id);
-	_ssr_lib_destroy(&script->lib);
+    size_t routines_len = _ssr_vec_len(&script->routines);
+    for (size_t i = 0; i < routines_len; ++i)
+    {
+        _ssr_routine_t* routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, i);
+        _ssr_str_destroy(routine->name);
+        _ssr_vec_destroy(&routine->moos);
+        _ssr_lock_destroy(&routine->moos_lock);
+    }
+
+    _ssr_vec_destroy(&script->routines);
+    _ssr_str_destroy(script->id);
+    _ssr_str_destroy(script->rnd_id);
+    _ssr_lib_destroy(&script->lib);
 }
 
 SSR_DEF void ssr_destroy(struct ssr_t* ssr)
 {
 #ifdef SSR_LIVE
-	ssr->state |= 0x1;
-	_ssr_thread_join(&ssr->thread);
+    ssr->state |= 0x1;
+    _ssr_thread_join(&ssr->thread);
 #endif
 
-	free(ssr->root);
-	if (ssr->state & 0x2)
-		free(ssr->config);
+    free(ssr->root);
+    if (ssr->state & 0x2)
+        free(ssr->config);
 
 #ifdef SSR_LIVE
-	_ssr_map_iter(&ssr->scripts, _ssr_script_destroy, NULL);
-	_ssr_map_destroy(&ssr->scripts);
+    _ssr_map_iter(&ssr->scripts, _ssr_script_destroy, NULL);
+    _ssr_map_destroy(&ssr->scripts);
 #else
-	_ssr_lib_destroy(&ssr->lib);
+    _ssr_lib_destroy(&ssr->lib);
 #endif
 }
 
 #ifdef SSR_LIVE
 static void _ssr_on_file(void* args, const char* base, const char* filename)
 {
-	const char* exts[] = { SSR_FILE_EXTS };
-	ssr_t* ssr = (ssr_t*)args;
+    const char* exts[] = { SSR_FILE_EXTS };
+    ssr_t* ssr = (ssr_t*)args;
 
-	// Extracting full path
-	_ssr_str_t full_path = _ssr_str_f("%s/%s", base, filename);
-	const char* ext = _ssr_extract_ext(filename);
+    // Extracting full path
+    _ssr_str_t full_path = _ssr_str_f("%s/%s", base, filename);
+    const char* ext = _ssr_extract_ext(filename);
 
-	// Checking if file is of a valid extension
-	size_t exti = 0;
-	while (exts[exti][0] != '\0')
-	{
-		if (strcmp(exts[exti], ext) == 0)
-			break;
-		++exti;
-	}
+    // Checking if file is of a valid extension
+    size_t exti = 0;
+    while (exts[exti][0] != '\0')
+    {
+        if (strcmp(exts[exti], ext) == 0)
+            break;
+        ++exti;
+    }
 
-	// In case skipping file
-	if (exts[exti][0] == '\0') {
-		_ssr_str_destroy(full_path);
-		return;
-	}
+    // In case skipping file
+    if (exts[exti][0] == '\0') {
+        _ssr_str_destroy(full_path);
+        return;
+    }
 
-	// Computing script id
-	// |root|rel_path|filename
-	// |     base    |filename
-	// ptr is in base
-	const char* rel_path = _ssr_extract_rel(ssr->root, full_path.b);
-	_ssr_str_t id = _ssr_replace_seps(rel_path, SSR_SEP);
+    // Computing script id
+    // |root|rel_path|filename
+    // |     base    |filename
+    // ptr is in base
+    const char* rel_path = _ssr_extract_rel(ssr->root, full_path.b);
+    _ssr_str_t id = _ssr_replace_seps(rel_path, SSR_SEP);
 
-	_ssr_script_t* script = (_ssr_script_t*)_ssr_map_find_str(&ssr->scripts, id.b);
+    _ssr_script_t* script = (_ssr_script_t*)_ssr_map_find_str(&ssr->scripts, id.b);
 
-	// new script, ssr has no permission to add scripts or routines, if script == NULL means 
-	// that no one is registered to listen to this file, no need to go further
-	if (script == NULL || _ssr_vec_len(&script->routines) == 0)
-		goto end;
+    // new script, ssr has no permission to add scripts or routines, if script == NULL means
+    // that no one is registered to listen to this file, no need to go further
+    if (script == NULL || _ssr_vec_len(&script->routines) == 0)
+        goto end;
 
-	_ssr_timestamp_t ts = _ssr_file_timestamp(full_path.b);
-	if (script->last_written < ts)
-	{
-		// Generating name for the share library
-		_ssr_str_t _shared_lib_out = _ssr_str_rnd(SSR_SL_LEN);
-		while (_ssr_file_exists(_shared_lib_out.b))
-		{
-			_ssr_str_destroy(_shared_lib_out);
-			_shared_lib_out = _ssr_str_rnd(SSR_SL_LEN);
-		}
+    _ssr_timestamp_t ts = _ssr_file_timestamp(full_path.b);
+    if (script->last_written < ts)
+    {
+        // Generating name for the share library
+        _ssr_str_t _shared_lib_out = _ssr_str_rnd(SSR_SL_LEN);
+        while (_ssr_file_exists(_shared_lib_out.b))
+        {
+            _ssr_str_destroy(_shared_lib_out);
+            _shared_lib_out = _ssr_str_rnd(SSR_SL_LEN);
+        }
 
-		// Combining into full path
-		_ssr_str_t shared_lib_out = _ssr_str_f("%s/%s.%s", ssr->bin, _shared_lib_out.b, _ssr_lib_ext());
+        // Combining into full path
+        _ssr_str_t shared_lib_out = _ssr_str_f("%s/%s.%s", ssr->bin, _shared_lib_out.b, _ssr_lib_ext());
 
-		// Time to compile and link into dll
-		bool compile_ret = _ssr_compile(full_path.b, ssr->config, shared_lib_out.b, _SSR_COMPILE_N_LINK);
+        // Time to compile and link into dll
+        bool compile_ret = _ssr_compile(full_path.b, ssr->config, shared_lib_out.b, _SSR_COMPILE_N_LINK);
         if (!compile_ret) {
             _ssr_log(SSR_CB_ERR, "something went wrong"); // todo
         }
 
-		// Loading library
-		_ssr_lib_t shared_lib;
-		_ssr_lib(&shared_lib, shared_lib_out.b);
-
-		// Updating map and all listeneres 
-		_ssr_script_t* script = (_ssr_script_t*)_ssr_map_find_str(&ssr->scripts, id.b);
-		size_t routines_len = _ssr_vec_len(&script->routines);
-		for (size_t i = 0; i < routines_len; ++i)
+        // Loading library
+        _ssr_lib_t shared_lib;
+        if (!_ssr_lib(&shared_lib, shared_lib_out.b))
 		{
-			_ssr_routine_t* routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, i);
-
-			// Finding new function pointer
-			void* new_fptr = _ssr_lib_func_addr(&shared_lib, routine->name.b);
-
-			_ssr_lock_acq(&routine->moos_lock);
-			size_t moos_len = _ssr_vec_len(&routine->moos);
-			for (size_t j = 0; j < moos_len; ++j)
-			{
-				ssr_routine_t* user_routine = *(ssr_routine_t**)_ssr_vec_at(&routine->moos, j);
-				// Updating function pointer
-				*user_routine = new_fptr;
-			}
-			_ssr_lock_rel(&routine->moos_lock);
+			_ssr_str_destroy(_shared_lib_out);
+			_ssr_str_destroy(shared_lib_out);
+			goto end;
 		}
 
-		// Can safely free library
-		_ssr_lib_destroy(&script->lib);
-		script->lib = shared_lib;
+        // Updating map and all listeneres
+        _ssr_script_t* script = (_ssr_script_t*)_ssr_map_find_str(&ssr->scripts, id.b);
+        size_t routines_len = _ssr_vec_len(&script->routines);
+        for (size_t i = 0; i < routines_len; ++i)
+        {
+            _ssr_routine_t* routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, i);
 
-		// rnd_id is saved for cleaning
-		_ssr_str_destroy(script->rnd_id);
-		script->rnd_id = _shared_lib_out;
+            // Finding new function pointer
+            void* new_fptr = _ssr_lib_func_addr(&shared_lib, routine->name.b);
 
-		script->last_written = ts;
-		_ssr_str_destroy(shared_lib_out);
-	}
-	script->last_seen = clock();
+            _ssr_lock_acq(&routine->moos_lock);
+            size_t moos_len = _ssr_vec_len(&routine->moos);
+            for (size_t j = 0; j < moos_len; ++j)
+            {
+                ssr_routine_t* user_routine = *(ssr_routine_t**)_ssr_vec_at(&routine->moos, j);
+                // Updating function pointer
+                *user_routine = new_fptr;
+            }
+            _ssr_lock_rel(&routine->moos_lock);
+        }
 
-	size_t routines_len = _ssr_vec_len(&script->routines);
-	for (size_t i = 0; i < routines_len; ++i)
-	{
-		_ssr_routine_t* routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, i);
-		void* addr = routine->addr;
-		routine->addr = _ssr_lib_func_addr(&script->lib, routine->name.b);
+        // Can safely free library
+        _ssr_lib_destroy(&script->lib);
+        script->lib = shared_lib;
+
+        // rnd_id is saved for cleaning
+        _ssr_str_destroy(script->rnd_id);
+        script->rnd_id = _shared_lib_out;
+
+        script->last_written = ts;
+        _ssr_str_destroy(shared_lib_out);
+    }
+    script->last_seen = clock();
+
+    size_t routines_len = _ssr_vec_len(&script->routines);
+    for (size_t i = 0; i < routines_len; ++i)
+    {
+        _ssr_routine_t* routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, i);
+        void* addr = routine->addr;
+        routine->addr = _ssr_lib_func_addr(&script->lib, routine->name.b);
         if (addr != routine->addr)
-		{
-			void* new_fptr = _ssr_lib_func_addr(&script->lib, routine->name.b);
+        {
+            void* new_fptr = _ssr_lib_func_addr(&script->lib, routine->name.b);
 
-			_ssr_lock_acq(&routine->moos_lock);
-			size_t moos_len = _ssr_vec_len(&routine->moos);
-			for (size_t j = 0; j < moos_len; ++j)
-			{
-				ssr_routine_t* user_routine = *(ssr_routine_t**)_ssr_vec_at(&routine->moos, j);
-				// Updating function pointer
-				*user_routine = new_fptr;
-			}
-			_ssr_lock_rel(&routine->moos_lock);
-		}
-	}
+            _ssr_lock_acq(&routine->moos_lock);
+            size_t moos_len = _ssr_vec_len(&routine->moos);
+            for (size_t j = 0; j < moos_len; ++j)
+            {
+                ssr_routine_t* user_routine = *(ssr_routine_t**)_ssr_vec_at(&routine->moos, j);
+                // Updating function pointer
+                *user_routine = new_fptr;
+            }
+            _ssr_lock_rel(&routine->moos_lock);
+        }
+    }
 end:
-	_ssr_str_destroy(full_path);
-	_ssr_str_destroy(id);
+    _ssr_str_destroy(full_path);
+    _ssr_str_destroy(id);
 }
 
 
 //@main
 #ifdef _WIN32 // && _MSC_VER
-static DWORD WINAPI 
+static DWORD WINAPI
 #else
 static void*
 #endif
 _ssr_main(void* args)
 {
-	ssr_t* ssr = (ssr_t*)args;
+    ssr_t* ssr = (ssr_t*)args;
 
-	_ssr_str_t bin_dir = _ssr_str_f("%s/%s", ssr->root, SSR_BIN_DIR);
-	ssr->bin = bin_dir.b;
+    _ssr_str_t bin_dir = _ssr_str_f("%s/%s", ssr->root, SSR_BIN_DIR);
+    ssr->bin = bin_dir.b;
 
-	// Setting up logging for current instance
-	_ssr_log(0, NULL, ssr);
+    // Setting up logging for current instance
+    _ssr_log(0, NULL, ssr);
     //_ssr_log(SSR_CB_INFO, "Watcher running on %s", ssr->root);
-	
-	// Removing current bin directory
-	_ssr_new_dir(bin_dir.b);
 
-	while ((ssr->state & 0x1) == 0)
-	{
-		_ssr_iter_dir(ssr->root, _ssr_on_file, ssr);
-		_ssr_sleep(SSR_SLEEP_MS);
-	}
+    // Removing current bin directory
+    _ssr_new_dir(bin_dir.b);
 
-	_ssr_str_destroy(bin_dir);
-	return EXIT_SUCCESS;
+    while ((ssr->state & 0x1) == 0)
+    {
+        _ssr_iter_dir(ssr->root, _ssr_on_file, ssr);
+        _ssr_sleep(SSR_SLEEP_MS);
+    }
+
+    _ssr_str_destroy(bin_dir);
+    return EXIT_SUCCESS;
 }
 #else
 static void _ssr_add_file_cb(void* args, const char* base, const char* filename)
 {
-	_ssr_vec_t* files = (_ssr_vec_t*)args;
-	_ssr_str_t full_path = _ssr_str_f("%s/%s", base, filename);
-	_ssr_vec_push(files, &full_path);
+    _ssr_vec_t* files = (_ssr_vec_t*)args;
+    _ssr_str_t full_path = _ssr_str_f("%s/%s", base, filename);
+    _ssr_vec_push(files, &full_path);
 }
 #endif
 
 SSR_DEF bool ssr_run(struct ssr_t* ssr)
 {
 #ifdef SSR_LIVE
-	if (_ssr_thread(&ssr->thread, (void*)_ssr_main, ssr))
-	{
-		// ERROR: Failed to launch thread
-		return false;
-	}
-	return true;
+    if (_ssr_thread(&ssr->thread, (void*)_ssr_main, ssr))
+    {
+        // ERROR: Failed to launch thread
+        return false;
+    }
+    return true;
 #else
-	bool ret = false;
-	_ssr_vec_t files;
-	_ssr_vec(&files, sizeof(_ssr_str_t), 12);
-	_ssr_iter_dir(ssr->root, _ssr_add_file_cb, &files);
+    bool ret = false;
+    _ssr_vec_t files;
+    _ssr_vec(&files, sizeof(_ssr_str_t), 12);
+    _ssr_iter_dir(ssr->root, _ssr_add_file_cb, &files);
 
-	_ssr_str_t bin = _ssr_str_f("%s/%s", ssr->root, SSR_BIN_DIR);
-	_ssr_new_dir(bin.b);
+    _ssr_str_t bin = _ssr_str_f("%s/%s", ssr->root, SSR_BIN_DIR);
+    _ssr_new_dir(bin.b);
 
-	size_t files_len = _ssr_vec_len(&files);
-	if (files_len == 0)
-		goto end_no_files;
+    size_t files_len = _ssr_vec_len(&files);
+    if (files_len == 0)
+        goto end_no_files;
 
-	char** defines = (char**)malloc(sizeof(char*) * (ssr->config->num_defines+1));
-	for (size_t i = 0; i < ssr->config->num_defines; ++i)
-		defines[i] = ssr->config->defines[i];
-	++ssr->config->num_defines;
-	ssr->config->defines = defines;
+    char** defines = (char**)malloc(sizeof(char*) * (ssr->config->num_defines+1));
+    for (size_t i = 0; i < ssr->config->num_defines; ++i)
+        defines[i] = ssr->config->defines[i];
+    ++ssr->config->num_defines;
+    ssr->config->defines = defines;
 
-	size_t linker_input_len = 0;
-	size_t linker_input_cap = 1024;
-	char* linker_input = (char*)malloc(linker_input_cap);
-	linker_input[0] = '\0';
-	for (size_t i = 0; i < files_len; ++i)
-	{
-		_ssr_str_t* path = (_ssr_str_t*)_ssr_vec_at(&files, i);
-		_ssr_str_t out = _ssr_str_f("%s/%d.obj", bin.b, i);
+    size_t linker_input_len = 0;
+    size_t linker_input_cap = 1024;
+    char* linker_input = (char*)malloc(linker_input_cap);
+    linker_input[0] = '\0';
+    for (size_t i = 0; i < files_len; ++i)
+    {
+        _ssr_str_t* path = (_ssr_str_t*)_ssr_vec_at(&files, i);
+        _ssr_str_t out = _ssr_str_f("%s/%d.obj", bin.b, i);
 
-		size_t out_len = strlen(out.b);
-		if (out_len + linker_input_len > linker_input_cap)
-		{
-			linker_input = (char*)realloc(linker_input, linker_input_cap * 2); // TODO: max..
-			linker_input_cap *= 2;
-		}
+        size_t out_len = strlen(out.b);
+        if (out_len + linker_input_len > linker_input_cap)
+        {
+            linker_input = (char*)realloc(linker_input, linker_input_cap * 2); // TODO: max..
+            linker_input_cap *= 2;
+        }
 
-		snprintf(linker_input, linker_input_cap, "%s %s", linker_input, out.b);
-		linker_input_len += out_len;
+        snprintf(linker_input, linker_input_cap, "%s %s", linker_input, out.b);
+        linker_input_len += out_len;
 
-		// In order to avoid name clashes <script-id>_<func>
-		const char* script_rel = _ssr_extract_rel(ssr->root, ((_ssr_str_t*)_ssr_vec_at(&files, i))->b);
-		_ssr_str_t script_id = _ssr_replace_seps(script_rel, SSR_SEP);
-		char buf[1024];
-		size_t buf_len = snprintf(buf, 1024, "\"SSR_SCRIPTID=%s\"", script_id.b);
-		_ssr_str_destroy(script_id);
-		defines[ssr->config->num_defines-1] = (char*)malloc(buf_len+1);
-		_ssr_strncpy(defines[ssr->config->num_defines-1], buf, buf_len+1);
+        // In order to avoid name clashes <script-id>_<func>
+        const char* script_rel = _ssr_extract_rel(ssr->root, ((_ssr_str_t*)_ssr_vec_at(&files, i))->b);
+        _ssr_str_t script_id = _ssr_replace_seps(script_rel, SSR_SEP);
+        char buf[1024];
+        size_t buf_len = snprintf(buf, 1024, "\"SSR_SCRIPTID=%s\"", script_id.b);
+        _ssr_str_destroy(script_id);
+        defines[ssr->config->num_defines-1] = (char*)malloc(buf_len+1);
+        _ssr_strncpy(defines[ssr->config->num_defines-1], buf, buf_len+1);
 
-		bool ret = _ssr_compile(path->b, ssr->config, out.b, _SSR_COMPILE);
-		_ssr_str_destroy(out);
-		free(defines[ssr->config->num_defines - 1]);
-		if (!ret)
-			goto end_no_lib;
-	}
+        bool ret = _ssr_compile(path->b, ssr->config, out.b, _SSR_COMPILE);
+        _ssr_str_destroy(out);
+        free(defines[ssr->config->num_defines - 1]);
+        if (!ret)
+            goto end_no_lib;
+    }
 
-	_ssr_str_t out = _ssr_str_f("%s/%s.%s", bin.b, "ssr", _ssr_lib_ext());
-	bool link_ret = _ssr_compile(linker_input, ssr->config, out.b, _SSR_LINK);
-	if (!link_ret)
-		goto end;
+    _ssr_str_t out = _ssr_str_f("%s/%s.%s", bin.b, "ssr", _ssr_lib_ext());
+    bool link_ret = _ssr_compile(linker_input, ssr->config, out.b, _SSR_LINK);
+    if (!link_ret)
+        goto end;
 
-	// loading library & hooking up functions
-	_ssr_lib(&ssr->lib, out.b); // todo check valid
+    // loading library & hooking up functions
+    _ssr_lib(&ssr->lib, out.b); // todo check valid
 
-	ret = true;
+    ret = true;
 
 end:
-	_ssr_str_destroy(out);
+    _ssr_str_destroy(out);
 end_no_lib:
-	free(linker_input);
-	free(defines);
+    free(linker_input);
+    free(defines);
 end_no_files:
-	_ssr_str_destroy(bin);
+    _ssr_str_destroy(bin);
 
-	for (size_t i = 0; i < files_len; ++i)
-		_ssr_str_destroy(*(_ssr_str_t*)_ssr_vec_at(&files, i));
-	_ssr_vec_destroy(&files);
-	return ret;
+    for (size_t i = 0; i < files_len; ++i)
+        _ssr_str_destroy(*(_ssr_str_t*)_ssr_vec_at(&files, i));
+    _ssr_vec_destroy(&files);
+    return ret;
 #endif
 }
 
 SSR_DEF bool ssr_add(struct ssr_t* ssr, const char* script_id, const char* fname, ssr_func_t* user_routine)
 {
 #ifdef SSR_LIVE
-	_ssr_script_t* script = (_ssr_script_t*)_ssr_map_find_str(&ssr->scripts, script_id);
+    _ssr_script_t* script = (_ssr_script_t*)_ssr_map_find_str(&ssr->scripts, script_id);
 
-	// First time request  
-	if (script == NULL)
-	{
-		_ssr_script_t new_script;
-		_ssr_vec(&new_script.routines, sizeof(_ssr_routine_t), 32);
-		new_script.last_seen = 0;
-		new_script.last_written = 0;
-		new_script.rnd_id.b = NULL;
-		new_script.id = _ssr_str(script_id);
-		new_script.lib.h = NULL;
-		_ssr_map_add_str(&ssr->scripts, &new_script);
-	}
-	script = (_ssr_script_t*)_ssr_map_find_str(&ssr->scripts, script_id); // TODO can be avoided
+    // First time request
+    if (script == NULL)
+    {
+        _ssr_script_t new_script;
+        _ssr_vec(&new_script.routines, sizeof(_ssr_routine_t), 32);
+        new_script.last_seen = 0;
+        new_script.last_written = 0;
+        new_script.rnd_id.b = NULL;
+        new_script.id = _ssr_str(script_id);
+        new_script.lib.h = NULL;
+        _ssr_map_add_str(&ssr->scripts, &new_script);
+    }
+    script = (_ssr_script_t*)_ssr_map_find_str(&ssr->scripts, script_id); // TODO can be avoided
 
-	_ssr_routine_t* routine = NULL;
-	size_t routines_len = _ssr_vec_len(&script->routines);
-	for (size_t i = 0; i < routines_len; ++i)
-	{
-		_ssr_routine_t* _routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, i);
-		if (strcmp(fname, _routine->name.b) == 0)
-		{
-			routine = _routine;
-			break;
-		}
-	}
+    _ssr_routine_t* routine = NULL;
+    size_t routines_len = _ssr_vec_len(&script->routines);
+    for (size_t i = 0; i < routines_len; ++i)
+    {
+        _ssr_routine_t* _routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, i);
+        if (strcmp(fname, _routine->name.b) == 0)
+        {
+            routine = _routine;
+            break;
+        }
+    }
 
-	if (routine == NULL)
-	{
-		_ssr_routine_t new_routine;
-		new_routine.name = _ssr_str(fname);
-		new_routine.addr = NULL;
-		_ssr_vec(&new_routine.moos, sizeof(void*), 32);
-		_ssr_lock(&new_routine.moos_lock);
+    if (routine == NULL)
+    {
+        _ssr_routine_t new_routine;
+        new_routine.name = _ssr_str(fname);
+        new_routine.addr = NULL;
+        _ssr_vec(&new_routine.moos, sizeof(void*), 32);
+        _ssr_lock(&new_routine.moos_lock);
 
-		_ssr_lock_acq(&new_routine.moos_lock);
-		_ssr_vec_push(&new_routine.moos, &user_routine);
-		_ssr_lock_rel(&new_routine.moos_lock);
+        _ssr_lock_acq(&new_routine.moos_lock);
+        _ssr_vec_push(&new_routine.moos, &user_routine);
+        _ssr_lock_rel(&new_routine.moos_lock);
 
-		_ssr_vec_push(&script->routines, &new_routine);
-		routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, _ssr_vec_len(&script->routines) - 1);
-	}
+        _ssr_vec_push(&script->routines, &new_routine);
+        routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, _ssr_vec_len(&script->routines) - 1);
+    }
 
-	// Registering as listener
-	void* routine_addr = routine->addr;
-	if (routine_addr != NULL)
-		*user_routine = routine_addr; // Might be already up to date but not a problem
+    // Registering as listener
+    void* routine_addr = routine->addr;
+    if (routine_addr != NULL)
+        *user_routine = routine_addr; // Might be already up to date but not a problem
 
 #else
-	_ssr_str_t func = _ssr_str_f("%s$%s", script_id, fname);
-	void* fptr = _ssr_lib_func_addr(&ssr->lib, func.b);
-	if (fptr == NULL)
-	{
-		// todo log
-		return false;
-	}
-	(*user_routine) = fptr;
+    _ssr_str_t func = _ssr_str_f("%s$%s", script_id, fname);
+    void* fptr = _ssr_lib_func_addr(&ssr->lib, func.b);
+    if (fptr == NULL)
+    {
+        // todo log
+        return false;
+    }
+    (*user_routine) = fptr;
 #endif
-	return true;
+    return true;
 }
 
 SSR_DEF void ssr_remove(struct ssr_t* ssr, const char* script_id, const char* fname, ssr_func_t* user_routine)
 {
 #ifdef SSR_LIVE
-	_ssr_script_t* script = (_ssr_script_t*)_ssr_map_find_str(&ssr->scripts, script_id);
-	if (script == NULL)
-		return;
+    _ssr_script_t* script = (_ssr_script_t*)_ssr_map_find_str(&ssr->scripts, script_id);
+    if (script == NULL)
+        return;
 
-	size_t num_routines = _ssr_vec_len(&script->routines);
-	for (size_t i = 0; i < num_routines; ++i)
-	{
-		_ssr_routine_t* routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, i);
-		if (strcmp(routine->name.b, fname) == 0)
-		{
-			_ssr_vec_remove(&routine->moos, &user_routine);
+    size_t num_routines = _ssr_vec_len(&script->routines);
+    for (size_t i = 0; i < num_routines; ++i)
+    {
+        _ssr_routine_t* routine = (_ssr_routine_t*)_ssr_vec_at(&script->routines, i);
+        if (strcmp(routine->name.b, fname) == 0)
+        {
+            _ssr_vec_remove(&routine->moos, &user_routine);
 
-			if (_ssr_vec_len(&routine->moos) == 0) {} // TODO: Remove subnode
-			return;
-		}
-	}
+            if (_ssr_vec_len(&routine->moos) == 0) {} // TODO: Remove subnode
+            return;
+        }
+    }
 #else
-	(void)ssr; (void)script_id; (void)fname; (void)user_routine;
+    (void)ssr; (void)script_id; (void)fname; (void)user_routine;
 #endif
 }
 
 SSR_DEF void ssr_cb(struct ssr_t* ssr, int mask, ssr_cb_t cb)
 {
-	ssr->cb_mask = mask;
-	ssr->cb = cb;
+    ssr->cb_mask = mask;
+    ssr->cb = cb;
 }
 
 static void _ssr_log(int type, const char* fmt, ...)
 {
-	static ssr_t* ssr = NULL;
+    static ssr_t* ssr = NULL;
 
-	if (fmt == NULL)
-	{
-		va_list args;
-		va_start(args, fmt);
-		ssr = va_arg(args, ssr_t*);
-		va_end(args);
-		return;
-	}
+    if (fmt == NULL)
+    {
+        va_list args;
+        va_start(args, fmt);
+        ssr = va_arg(args, ssr_t*);
+        va_end(args);
+        return;
+    }
 
-	if (ssr == NULL || ssr->cb == NULL || (type & ssr->cb_mask) == 0x0)
-		return;
+    if (ssr == NULL || ssr->cb == NULL || (type & ssr->cb_mask) == 0x0)
+        return;
 
-	char log_buf[SSR_LOG_BUF];
-	va_list args;
-	va_start(args, fmt);
-	vsnprintf(log_buf, SSR_LOG_BUF, fmt, args);
-	va_end(args);
-	ssr->cb(type, log_buf);
+    char log_buf[SSR_LOG_BUF];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(log_buf, SSR_LOG_BUF, fmt, args);
+    va_end(args);
+    ssr->cb(type, log_buf);
 }
 #endif

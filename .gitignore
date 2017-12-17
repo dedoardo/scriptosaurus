@@ -1,3 +1,5 @@
 scriptosaurus/
 example/scripts/.bin/
 example/build/
+cmake-build-*/
+.idea
