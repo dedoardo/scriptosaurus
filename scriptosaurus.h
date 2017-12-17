@@ -655,7 +655,7 @@ static void _ssr_new_dir(const char* dir)
 	}
 
 	_ssr_str_t rm = _ssr_str_f("cmd.exe /C \"rd /s /q \"%s\"\"", dir);
-	_ssr_run(rm.b, NULL);
+	_ssr_run(rm.b, NULL, NULL);
 	CreateDirectoryA(dir, NULL);
 	_ssr_str_destroy(rm);
 }
@@ -665,7 +665,7 @@ static void _ssr_sleep(unsigned int ms)
 	Sleep(ms);
 }
 
-static int _ssr_run(char* cmd, _ssr_str_t* err)
+static int _ssr_run(char* cmd, _ssr_str_t* out, _ssr_str_t* err)
 {
 	HANDLE stdout_r, stdout_w;
 	HANDLE stderr_r, stderr_w;
@@ -697,6 +697,17 @@ static int _ssr_run(char* cmd, _ssr_str_t* err)
 	DWORD err_size;
 	PeekNamedPipe(stderr_r, NULL, 0, NULL, &err_size, NULL);
 
+	if (out != NULL) {
+		if (out_size == 0) {
+			out->b = _ssr_alloc(out_size);
+			out->b[out_size] = '\0';
+		} else {
+			out->b = _ssr_alloc(out_size);
+			if (out_size) ReadFile(stdout_r, out->b, out_size, &out_size, NULL);
+			out->b[out_size - 2] = '\0';	// overwrite trailing \r\n
+		}
+	}
+
 	if (err != NULL) {
 		if (err_size == 0) {
 			err->b = _ssr_alloc(err_size);
@@ -704,7 +715,7 @@ static int _ssr_run(char* cmd, _ssr_str_t* err)
 		} else {
 			err->b = _ssr_alloc(err_size);
 			if (err_size) ReadFile(stderr_r, err->b, err_size, &err_size, NULL);
-			err->b[err_size - 1] = '\0';	// overwrite trailing \n
+			err->b[err_size - 2] = '\0';	// overwrite trailing \r\n
 		}
 	}
 
@@ -1073,7 +1084,7 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		_ssr_log(SSR_CB_INFO, "Compiling %s ...", input);
 
 		_ssr_str_t err;
-		int ret = _ssr_run(compile.b, &err) == 0;
+		int ret = _ssr_run(compile.b, NULL, &err) == 0;
 		_ssr_str_destroy(compile);
 		if (strlen(err.b) > 0) {
 			if (ret) {
@@ -1121,7 +1132,7 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		_ssr_log(SSR_CB_INFO, "Linking %s ...", input);
 
 		_ssr_str_t err;
-		int ret = _ssr_run(link.b, &err) == 0;
+		int ret = _ssr_run(link.b, NULL, &err) == 0;
 		_ssr_str_destroy(link);
 		if (strlen(err.b) > 0) {
 			if (ret) {
@@ -1172,7 +1183,7 @@ static bool _ssr_compile_clang(const char* input, ssr_config_t* config, const ch
 #endif
 
         _ssr_str_t compile = _ssr_str_f(fmt, SSR_CLANG_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
-        int ret = _ssr_run(compile.b, NULL);
+        int ret = _ssr_run(compile.b, NULL, NULL);
         _ssr_str_destroy(compile);
         if (ret != 0)
             goto end;
@@ -1191,7 +1202,7 @@ static bool _ssr_compile_clang(const char* input, ssr_config_t* config, const ch
 #endif
 
         _ssr_str_t link = _ssr_str_f(fmt, SSR_CLANG_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
-        int ret = _ssr_run(link.b, NULL);
+        int ret = _ssr_run(link.b, NULL, NULL);
         _ssr_str_destroy(link);
         if (ret != 0)
             goto end;
@@ -1233,7 +1244,7 @@ static bool _ssr_compile_gcc(const char* input, ssr_config_t* config, const char
 #endif
 
         _ssr_str_t compile = _ssr_str_f(fmt, SSR_CLANG_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
-        int ret = _ssr_run(compile.b, NULL);
+        int ret = _ssr_run(compile.b, NULL, NULL);
         _ssr_str_destroy(compile);
         if (ret != 0)
             goto end;
@@ -1252,7 +1263,7 @@ static bool _ssr_compile_gcc(const char* input, ssr_config_t* config, const char
 #endif
 
         _ssr_str_t link = _ssr_str_f(fmt, SSR_CLANG_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
-        int ret = _ssr_run(link.b, NULL);
+        int ret = _ssr_run(link.b, NULL, NULL);
         _ssr_str_destroy(link);
         if (ret != 0)
             goto end;
@@ -1355,7 +1366,11 @@ SSR_DEF bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* 
 	if (ssr->config->compiler == SSR_COMPILER_MSVC && ssr->config->msvc_ver == SSR_MSVC_VER_14_1)
 	{
 		// TODO run vswhere
-		ssr->config->msvc141_path = "C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Auxiliary/Build/";
+		const char* vswhere_cmd = "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe -property installationPath";
+		_ssr_str_t output;
+		_ssr_run(vswhere_cmd, &output, NULL);
+		ssr->config->msvc141_path = _ssr_str_f("%s/VC/Auxiliary/Build/", output).b;
+		//ssr->config->msvc141_path = "C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Auxiliary/Build/";
 	}
 
 	/* Syntax:
