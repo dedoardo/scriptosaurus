@@ -8,9 +8,9 @@
 void msg_callback(int type, const char* msg)
 {
 	if (type == SSR_CB_ERR || type == SSR_CB_WARN)
-		fprintf(stderr, "ssr:%s\n", msg);
+		fprintf(stderr, "ssr: %s\n", msg);
 	else
-		fprintf(stdout, "ssr:%s\n", msg);
+		fprintf(stdout, "ssr: %s\n", msg);
 }
 
 struct Entry

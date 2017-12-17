@@ -669,7 +669,7 @@ static void _ssr_new_dir(const char* dir)
 	}
 
 	_ssr_str_t rm = _ssr_str_f("cmd.exe /C \"rd /s /q \"%s\"\"", dir);
-	_ssr_run(rm.b);
+	_ssr_run(rm.b, NULL, NULL);
 	CreateDirectoryA(dir, NULL);
 	_ssr_str_destroy(rm);
 }
@@ -679,7 +679,7 @@ static void _ssr_sleep(unsigned int ms)
 	Sleep(ms);
 }
 
-static int	_ssr_run(char* cmd)
+static int _ssr_run(char* cmd, _ssr_str_t* out, _ssr_str_t* err)
 {
 	HANDLE stdout_r, stdout_w;
 	HANDLE stderr_r, stderr_w;
@@ -702,23 +702,39 @@ static int	_ssr_run(char* cmd)
 
 	PROCESS_INFORMATION pi;
 	if (!CreateProcessA(NULL, cmd, NULL, NULL, true, 0, NULL, NULL, &si, &pi))
- 		return -1;
+		return -1;
 
 	WaitForSingleObject(pi.hProcess, INFINITE);
 
+	DWORD out_size;
+	PeekNamedPipe(stdout_r, NULL, 0, NULL, &out_size, NULL);
+	DWORD err_size;
+	PeekNamedPipe(stderr_r, NULL, 0, NULL, &err_size, NULL);
+
+	if (out != NULL) {
+		if (out_size == 0) {
+			out->b = _ssr_alloc(out_size);
+			out->b[out_size] = '\0';
+		} else {
+			out->b = _ssr_alloc(out_size);
+			if (out_size) ReadFile(stdout_r, out->b, out_size, &out_size, NULL);
+			out->b[out_size - 2] = '\0';	// overwrite trailing \r\n
+		}
+	}
+
+	if (err != NULL) {
+		if (err_size == 0) {
+			err->b = _ssr_alloc(err_size);
+			err->b[err_size] = '\0';
+		} else {
+			err->b = _ssr_alloc(err_size);
+			if (err_size) ReadFile(stderr_r, err->b, err_size, &err_size, NULL);
+			err->b[err_size - 2] = '\0';	// overwrite trailing \r\n
+		}
+	}
+
 	CloseHandle(stdout_w);
 	CloseHandle(stderr_w);
-
-	char child_out[SSR_COMPILER_BUF];
-	DWORD child_out_read;
-	ReadFile(stdout_r, child_out, SSR_COMPILER_BUF - 1, &child_out_read, NULL);
-	child_out[child_out_read] = '\0';
-
-	char child_err[SSR_COMPILER_BUF];
-	DWORD child_err_read;
-	ReadFile(stderr_r, child_err, SSR_COMPILER_BUF - 1, &child_err_read, NULL);
-	child_err[child_err_read] = '\0';
-
 	CloseHandle(stdout_r);
 	CloseHandle(stderr_r);
 
@@ -726,7 +742,7 @@ static int	_ssr_run(char* cmd)
 	GetExitCodeProcess(pi.hProcess, &ret_val);
 	CloseHandle(pi.hThread);
 	CloseHandle(pi.hProcess);
-	return (int)ret_val;
+	return (int) ret_val;
 }
 
 #elif defined(SSR_LINUX)
@@ -1090,7 +1106,7 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		_ssr_merge_in(include_directories, _SSR_ARGS_BUF_LEN, "/I", config->include_directories, config->num_include_directories);
 
 		// default flags
-		const char* default_args = "/c /EHsc";
+		const char* default_args = "/c /EHsc /nologo";
 
 		// flags
 		const char* gen_dbg = config->flags & SSR_FLAGS_GEN_DEBUG ? "/Zi" : "";
@@ -1105,12 +1121,25 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 			compile_out = _ssr_str_f("%s.obj", _out);
 
 		// vcvars - base - beg_args - default_flags - gen_dbg - mt_lib - compile_out - end_args - input files
-		char* fmt = "%s && cl.exe %s %s %s %s /Fo\"%s\" %s \"%s\"";
+		char* fmt = "%s > nul && cl.exe %s %s %s %s /Fo\"%s\" %s \"%s\"";
 
 		_ssr_str_t compile = _ssr_str_f(fmt, vcvars, beg_args, default_args, gen_dbg, mt_lib, stages & _SSR_LINK ? compile_out.b : _out, end_args, input);
-		int ret = _ssr_run(compile.b) == 0;
+		_ssr_log(SSR_CB_INFO, "Compiling %s ...", input);
+
+		_ssr_str_t err;
+		int ret = _ssr_run(compile.b, NULL, &err) == 0;
 		_ssr_str_destroy(compile);
-        if (!ret)
+		if (strlen(err.b) > 0) {
+			if (ret) {
+				_ssr_log(SSR_CB_WARN, err.b);
+			}
+			else {
+				_ssr_log(SSR_CB_ERR, err.b);
+			}
+		}
+		_ssr_str_destroy(err);
+        
+		if (!ret)
             goto end;
 	}
 	
@@ -1121,7 +1150,7 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		_ssr_merge_in(link_directories, _SSR_ARGS_BUF_LEN, "", config->link_libraries, config->num_link_libraries);
 
 		// default flags
-		const char* default_flags = "/DLL";
+		const char* default_flags = "/DLL /NOLOGO";
 
 		// flags
 		const char* gen_dbg = config->flags & SSR_FLAGS_GEN_DEBUG ? "/DEBUG" : "";
@@ -1140,11 +1169,23 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		;
 
 		// vcvars - base - beg_args - default_flags - gen_dbg - target - _out - end_args - input
-		char* fmt = "%s && link.exe %s %s %s %s /OUT:\"%s\" %s \"%s\" %s";
+		char* fmt = "%s > nul && link.exe %s %s %s %s /OUT:\"%s\" %s \"%s\" %s";
 
 		_ssr_str_t link = _ssr_str_f(fmt, vcvars, beg_args, default_flags, gen_dbg, target, _out, end_args, stages & _SSR_COMPILE ? compile_out.b : input, link_directories);
-		int ret = _ssr_run(link.b) == 0;
+		_ssr_log(SSR_CB_INFO, "Linking %s ...", input);
+
+		_ssr_str_t err;
+		int ret = _ssr_run(link.b, NULL, &err) == 0;
 		_ssr_str_destroy(link);
+		if (strlen(err.b) > 0) {
+			if (ret) {
+				_ssr_log(SSR_CB_WARN, err.b);
+			}
+			else {
+				_ssr_log(SSR_CB_ERR, err.b);
+			}
+		}
+
 		if (!ret)
 			goto end;
 	}
@@ -1185,7 +1226,7 @@ static bool _ssr_compile_clang(const char* input, ssr_config_t* config, const ch
 #endif
 
         _ssr_str_t compile = _ssr_str_f(fmt, SSR_CLANG_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
-        int ret = _ssr_run(compile.b);
+        int ret = _ssr_run(compile.b, NULL, NULL);
         _ssr_str_destroy(compile);
         if (ret != 0)
             goto end;
@@ -1204,7 +1245,7 @@ static bool _ssr_compile_clang(const char* input, ssr_config_t* config, const ch
 #endif
 
         _ssr_str_t link = _ssr_str_f(fmt, SSR_CLANG_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
-        int ret = _ssr_run(link.b);
+        int ret = _ssr_run(link.b, NULL, NULL);
         _ssr_str_destroy(link);
         if (ret != 0)
             goto end;
@@ -1385,11 +1426,15 @@ SSR_DEF bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* 
         *ssr->config = *config;
     }
 
-    if (ssr->config->compiler == SSR_COMPILER_MSVC && ssr->config->msvc_ver == SSR_MSVC_VER_14_1)
-    {
-        // TODO run vswhere
-        ssr->config->msvc141_path = "C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Auxiliary/Build/";
-    }
+	if (ssr->config->compiler == SSR_COMPILER_MSVC && ssr->config->msvc_ver == SSR_MSVC_VER_14_1)
+	{
+		// TODO run vswhere
+		const char* vswhere_cmd = "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe -property installationPath";
+		_ssr_str_t output;
+		_ssr_run(vswhere_cmd, &output, NULL);
+		ssr->config->msvc141_path = _ssr_str_f("%s/VC/Auxiliary/Build/", output).b;
+		//ssr->config->msvc141_path = "C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Auxiliary/Build/";
+	}
 
     /* Syntax:
         <filter>:[L]
