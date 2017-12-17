@@ -1300,10 +1300,10 @@ SSR_DEF bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* 
 	if (config == NULL)
 	{
 		ssr->config = (ssr_config_t*)malloc(sizeof(ssr_config_t));
-		ssr->config->compiler = SSR_COMPILER_CLANG;
+		ssr->config->compiler = SSR_COMPILER_MSVC;
 		ssr->config->msvc_ver = SSR_MSVC_VER_14_1;
 		ssr->config->msvc141_path = NULL;
-		ssr->config->target_arch = SSR_ARCH_X64;
+		ssr->config->target_arch = SSR_ARCH_X86;
 		ssr->config->flags = SSR_FLAGS_GEN_DEBUG;
 		ssr->config->include_directories = NULL;
 		ssr->config->num_include_directories = 0;
