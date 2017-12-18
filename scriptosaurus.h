@@ -1,17 +1,6 @@
 #ifndef _SSR_H_GUARD_
 #define _SSR_H_GUARD_
 
-// libc includes
-#include <stdlib.h>  
-#include <stdint.h>
-#include <stdio.h>
-#include <string.h>
-#include <time.h>
-#include <stdlib.h>
-#include <stdarg.h>
-#include <assert.h>
-#include <stdbool.h>
-
 #ifdef _WIN32
 #	define SSR_WIN
 #	ifdef _WIN64
@@ -29,6 +18,39 @@
 #else
 #	error
 #endif
+
+#if defined(SSR_SCRIPT)
+#if __cplusplus__
+#define SSR_EXTERN extern "C"
+#else
+#define SSR_EXTERN
+#endif
+
+#if defined(SSR_WIN)
+#	define SSR_EXPORT __declspec(dllexport)
+#elif defined(SSR_LINUX)
+#	define SSR_EXPORT __attribute__ ((visibility ("default")))
+#endif
+
+#if defined(SSR_SCRIPTID)
+#	define _ssr_func_paste(a, b) a ## $ ## b
+#	define _ssr_func_eval(a, b) _ssr_func_paste(a, b)
+#	define ssr_func(ret, name) SSR_EXTERN __declspec(dllexport) ret _ssr_func_eval(SSR_SCRIPTID, name)
+#else
+#	define ssr_func(ret, name) SSR_EXTERN SSR_EXPORT ret name
+#endif
+#else
+
+// libc includes
+#include <stdlib.h>  
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <assert.h>
+#include <stdbool.h>
 
 /*-----------------------------------------------------------------------------
 Scriptosaurus API - abbreviation is ssr
@@ -713,8 +735,7 @@ static int _ssr_run(char* cmd, _ssr_str_t* out, _ssr_str_t* err)
 
 	if (out != NULL) {
 		if (out_size == 0) {
-			out->b = _ssr_alloc(out_size);
-			out->b[out_size] = '\0';
+			*out = _ssr_str_e();
 		} else {
 			out->b = _ssr_alloc(out_size);
 			if (out_size) ReadFile(stdout_r, out->b, out_size, &out_size, NULL);
@@ -724,8 +745,7 @@ static int _ssr_run(char* cmd, _ssr_str_t* out, _ssr_str_t* err)
 
 	if (err != NULL) {
 		if (err_size == 0) {
-			err->b = _ssr_alloc(err_size);
-			err->b[err_size] = '\0';
+			*err = _ssr_str_e();
 		} else {
 			err->b = _ssr_alloc(err_size);
 			if (err_size) ReadFile(stderr_r, err->b, err_size, &err_size, NULL);
@@ -1108,7 +1128,7 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 
 		// flags
 		const char* gen_dbg = config->flags & SSR_FLAGS_GEN_DEBUG ? "/Zi" : "";
-		const char* mt_lib = config->flags & SSR_FLAGS_GEN_DEBUG ? "/Mtd" : "Mt";
+		const char* mt_lib = "";//config->flags & SSR_FLAGS_GEN_DEBUG ? "/Mtd" : "/Mt";
 
 		// custom args
 		const char* beg_args = config->compile_args_beg == NULL ? "" : config->compile_args_beg;
@@ -1127,7 +1147,7 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		_ssr_str_t err;
 		int ret = _ssr_run(compile.b, NULL, &err) == 0;
 		_ssr_str_destroy(compile);
-		if (strlen(err.b) > 0) 
+		if (err.b != NULL) 
 		{
 			if (ret)
 				_ssr_log(SSR_CB_WARN, err.b);
@@ -1444,7 +1464,7 @@ SSR_DEF bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* 
 #if defined(SSR_32)
 		ssr->config->target_arch = SSR_ARCH_X86;
 #elif defined(SSR_64)
-		ssr->config->target_arch = SSR_ARCH_X86;
+		ssr->config->target_arch = SSR_ARCH_X64;
 #else
 #	error Unrecognized platform
 #endif
@@ -1616,6 +1636,7 @@ static void _ssr_on_file(void* args, const char* base, const char* filename)
 
             // Finding new function pointer
             void* new_fptr = _ssr_lib_func_addr(&shared_lib, routine->name.b);
+			routine->addr = new_fptr;
 
             _ssr_lock_acq(&routine->moos_lock);
             size_t moos_len = _ssr_vec_len(&routine->moos);
@@ -1662,6 +1683,7 @@ static void _ssr_on_file(void* args, const char* base, const char* filename)
             _ssr_lock_rel(&routine->moos_lock);
         }
     }
+
 end:
     _ssr_str_destroy(full_path);
     _ssr_str_destroy(id);
@@ -1912,4 +1934,5 @@ static void _ssr_log(int type, const char* fmt, ...)
     va_end(args);
     ssr->cb(type, log_buf);
 }
-#endif
+#endif // SSR_SCRIPT
+#endif // SSR_H_GUARD

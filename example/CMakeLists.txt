@@ -7,7 +7,7 @@ set(link_libraries "")
 
 if (WIN32)
     list(APPEND compile_definitions _CRT_SECURE_NO_WARNINGS)
-    set_target_properties(Scriptosaurus_example PROPERTIES ${properties})
+    set_target_properties(Scriptosaurus_example PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif (WIN32)
 
 if (UNIX)
