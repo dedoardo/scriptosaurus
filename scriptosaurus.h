@@ -261,7 +261,7 @@ static _ssr_str_t		_ssr_replace_seps(const char* str, char new_sep);
 static void				_ssr_iter_dir(const char* root, _ssr_iter_dir_cb_t cv, void* args);
 static void				_ssr_new_dir(const char* dir);
 static void				_ssr_sleep(unsigned int ms);
-static int				_ssr_run(char* cmd);
+static int				_ssr_run(char* cmd, _ssr_str_t* out, _ssr_str_t* err);
 
 /*-----------------------------------------------------------------------------
 	Implementation
@@ -896,7 +896,7 @@ static void _ssr_sleep(unsigned int ms)
 	usleep(ms * 1000);
 }
 
-static int	_ssr_run(char* cmd)
+static int	_ssr_run(char* cmd, _ssr_str_t* out, _ssr_str_t* err)
 {
     char buf[SSR_COMPILER_BUF+3];
 	memset(buf, 0, SSR_COMPILER_BUF+3);
@@ -916,6 +916,8 @@ static int	_ssr_run(char* cmd)
 	else
 		ret_code = WEXITSTATUS(ret_code);
 
+	// Gcc output sometimes contains '\0\0' on newlines, as the buffer is guaranteed
+	// to have '\0\0\0' at the end this is safe. Just replacing '\0\0' to make code printable
 	char* cur = buf;
 	while (*cur != '\0' || *(cur+1) != '\0' || (*(cur+2) != '\0'))
 	{
@@ -923,12 +925,8 @@ static int	_ssr_run(char* cmd)
 		++cur;
 	}
 
-	if (ret_code != 0 && buf[0] == '\0')
-		_ssr_log(SSR_CB_ERR, "Failed to execute command %s with error %d", cmd, ret_code);
-	else if (ret_code != 0)
-		_ssr_log(SSR_CB_ERR, "%s", buf);
-	else if (buf[0] != '\0')
-		_ssr_log(SSR_CB_WARN, "%s", buf);
+    if (buf[0] != '\0')
+	    *err = _ssr_str(buf);
 	return ret_code;
 }
 
@@ -1175,7 +1173,7 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		_ssr_str_t err;
 		int ret = _ssr_run(link.b, NULL, &err) == 0;
 		_ssr_str_destroy(link);
-		if (strlen(err.b) > 0) 
+		if (err.b != NULL)
 		{
 			if (ret)
 				_ssr_log(SSR_CB_WARN, err.b);
@@ -1227,7 +1225,7 @@ static bool _ssr_compile_clang(const char* input, ssr_config_t* config, const ch
 		_ssr_str_t err;
 		int ret = _ssr_run(compile.b, NULL, &err) == 0;
 		_ssr_str_destroy(compile);
-		if (strlen(err.b) > 0) 
+		if (err.b != NULL)
 		{
 			if (ret)
 				_ssr_log(SSR_CB_WARN, err.b);
@@ -1257,7 +1255,7 @@ static bool _ssr_compile_clang(const char* input, ssr_config_t* config, const ch
 		_ssr_str_t err;
 		int ret = _ssr_run(link.b, NULL, &err) == 0;
 		_ssr_str_destroy(link);
-		if (strlen(err.b) > 0) 
+		if (err.b != NULL)
 		{
 			if (ret)
 				_ssr_log(SSR_CB_WARN, err.b);
@@ -1310,7 +1308,7 @@ static bool _ssr_compile_gcc(const char* input, ssr_config_t* config, const char
 		_ssr_str_t err;
 		int ret = _ssr_run(compile.b, NULL, &err) == 0;
 		_ssr_str_destroy(compile);
-		if (strlen(err.b) > 0) 
+		if (err.b != NULL)
 		{
 			if (ret)
 				_ssr_log(SSR_CB_WARN, err.b);
@@ -1340,7 +1338,7 @@ static bool _ssr_compile_gcc(const char* input, ssr_config_t* config, const char
 		_ssr_str_t err;
 		int ret = _ssr_run(link.b, NULL, &err) == 0;
 		_ssr_str_destroy(link);
-		if (strlen(err.b) > 0) 
+		if (err.b != NULL)
 		{
 			if (ret) 
 				_ssr_log(SSR_CB_WARN, err.b);
