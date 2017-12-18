@@ -1636,7 +1636,6 @@ static void _ssr_on_file(void* args, const char* base, const char* filename)
 
             // Finding new function pointer
             void* new_fptr = _ssr_lib_func_addr(&shared_lib, routine->name.b);
-			routine->addr = new_fptr;
 
             _ssr_lock_acq(&routine->moos_lock);
             size_t moos_len = _ssr_vec_len(&routine->moos);
@@ -1662,6 +1661,10 @@ static void _ssr_on_file(void* args, const char* base, const char* filename)
     }
     script->last_seen = clock();
 
+	// The reason this is needed is because the compilation is triggered by a client-side call to 
+	// ssr_add() which inserts a ssr_script and an ssr_routine inside the map. _ssr_on_file compiles
+	// the script and updates the listener. Any subsequent call to ssr_add inserts a new routine in the 
+	// map, but the client-side **cannot** operate on ssr->lib as there is no lock.
     size_t routines_len = _ssr_vec_len(&script->routines);
     for (size_t i = 0; i < routines_len; ++i)
     {
