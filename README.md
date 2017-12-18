@@ -131,4 +131,4 @@ typedef struct ssr_config_t
 
 
 ## Acknowledgements
-[c4stan](https://github.com/c4stan)
+Thanks to [c4stan](https://github.com/c4stan) for the help
