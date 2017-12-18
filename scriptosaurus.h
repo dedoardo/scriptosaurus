@@ -1383,17 +1383,12 @@ SSR_DEF bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* 
         *ssr->config = *config;
     }
 
-    if (ssr->config->compiler == SSR_COMPILER_MSVC) {
-        if (ssr->config->msvc_ver == SSR_MSVC_VER_14_1) {
-            const char* vswhere_cmd =
-                "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe -property installationPath";
-            _ssr_str_t output;
-            _ssr_run(vswhere_cmd, &output, NULL);
-            ssr->config->msvc141_path = _ssr_str_f("%s/VC/Auxiliary/Build/", output).b;
-        } else {
-            // TODO
-            assert(false);
-        }
+    if (ssr->config->compiler == SSR_COMPILER_MSVC && ssr->config->msvc_ver == SSR_MSVC_VER_14_1) {
+        const char* vswhere_cmd =
+            "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe -property installationPath";
+        _ssr_str_t output;
+        _ssr_run(vswhere_cmd, &output, NULL);
+        ssr->config->msvc141_path = _ssr_str_f("%s/VC/Auxiliary/Build/", output).b;
     }
 
     /* Syntax:
