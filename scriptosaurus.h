@@ -1129,18 +1129,16 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		_ssr_str_t err;
 		int ret = _ssr_run(compile.b, NULL, &err) == 0;
 		_ssr_str_destroy(compile);
-		if (strlen(err.b) > 0) {
-			if (ret) {
+		if (strlen(err.b) > 0) 
+		{
+			if (ret)
 				_ssr_log(SSR_CB_WARN, err.b);
-			}
-			else {
+			else
 				_ssr_log(SSR_CB_ERR, err.b);
-			}
 		}
 		_ssr_str_destroy(err);
         
-		if (!ret)
-            goto end;
+		if (!ret) goto end;
 	}
 	
 	if (stages & _SSR_LINK)
@@ -1177,17 +1175,15 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 		_ssr_str_t err;
 		int ret = _ssr_run(link.b, NULL, &err) == 0;
 		_ssr_str_destroy(link);
-		if (strlen(err.b) > 0) {
-			if (ret) {
+		if (strlen(err.b) > 0) 
+		{
+			if (ret)
 				_ssr_log(SSR_CB_WARN, err.b);
-			}
-			else {
+			else
 				_ssr_log(SSR_CB_ERR, err.b);
-			}
 		}
 
-		if (!ret)
-			goto end;
+		if (!ret) goto end;
 	}
 
 	ret = true;
@@ -1226,10 +1222,21 @@ static bool _ssr_compile_clang(const char* input, ssr_config_t* config, const ch
 #endif
 
         _ssr_str_t compile = _ssr_str_f(fmt, SSR_CLANG_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
-        int ret = _ssr_run(compile.b, NULL, NULL);
-        _ssr_str_destroy(compile);
-        if (ret != 0)
-            goto end;
+		_ssr_log(SSR_CB_INFO, "Compiling %s ...", input);
+		
+		_ssr_str_t err;
+		int ret = _ssr_run(compile.b, NULL, &err) == 0;
+		_ssr_str_destroy(compile);
+		if (strlen(err.b) > 0) 
+		{
+			if (ret)
+				_ssr_log(SSR_CB_WARN, err.b);
+			else
+				_ssr_log(SSR_CB_ERR, err.b);
+		}
+		_ssr_str_destroy(err);
+
+        if (!ret) goto end;
     }
 
     if (stages & _SSR_LINK)
@@ -1245,10 +1252,21 @@ static bool _ssr_compile_clang(const char* input, ssr_config_t* config, const ch
 #endif
 
         _ssr_str_t link = _ssr_str_f(fmt, SSR_CLANG_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
-        int ret = _ssr_run(link.b, NULL, NULL);
-        _ssr_str_destroy(link);
-        if (ret != 0)
-            goto end;
+		_ssr_log(SSR_CB_INFO, "Linking %s ...", input);
+		
+		_ssr_str_t err;
+		int ret = _ssr_run(link.b, NULL, &err) == 0;
+		_ssr_str_destroy(link);
+		if (strlen(err.b) > 0) 
+		{
+			if (ret)
+				_ssr_log(SSR_CB_WARN, err.b);
+			else
+				_ssr_log(SSR_CB_ERR, err.b);
+		}
+		_ssr_str_destroy(err);
+
+		if (!ret) goto end;
     }
 
     ret = true;
@@ -1287,10 +1305,21 @@ static bool _ssr_compile_gcc(const char* input, ssr_config_t* config, const char
 #endif
 
         _ssr_str_t compile = _ssr_str_f(fmt, SSR_GCC_EXEC, gen_dbg, opt_lvl, defines, include_directories, stages & _SSR_LINK ? compile_out.b : _out, input);
-        int ret = _ssr_run(compile.b);
-        _ssr_str_destroy(compile);
-        if (ret != 0)
-            goto end;
+		_ssr_log(SSR_CB_INFO, "Compiling %s ...", input);
+		
+		_ssr_str_t err;
+		int ret = _ssr_run(compile.b, NULL, &err) == 0;
+		_ssr_str_destroy(compile);
+		if (strlen(err.b) > 0) 
+		{
+			if (ret)
+				_ssr_log(SSR_CB_WARN, err.b);
+			else
+				_ssr_log(SSR_CB_ERR, err.b);
+		}
+		_ssr_str_destroy(err);
+
+        if (!ret) goto end;
     }
 
     if (stages & _SSR_LINK)
@@ -1306,10 +1335,22 @@ static bool _ssr_compile_gcc(const char* input, ssr_config_t* config, const char
 #endif
 
         _ssr_str_t link = _ssr_str_f(fmt, SSR_GCC_EXEC, _out, stages & _SSR_COMPILE ? compile_out.b : input);
-        int ret = _ssr_run(link.b);
-        _ssr_str_destroy(link);
-        if (ret != 0)
-            goto end;
+		_ssr_log(SSR_CB_INFO, "Linking %s ...", input);
+		
+		_ssr_str_t err;
+		int ret = _ssr_run(link.b, NULL, &err) == 0;
+		_ssr_str_destroy(link);
+		if (strlen(err.b) > 0) 
+		{
+			if (ret) 
+				_ssr_log(SSR_CB_WARN, err.b);
+			else 
+				_ssr_log(SSR_CB_ERR, err.b);
+		}
+		_ssr_str_destroy(err);
+
+        if (!ret) 
+			goto end;
     }
 
     ret = true;
@@ -1389,11 +1430,12 @@ SSR_DEF bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* 
 #elif defined(__GNUC__) || defined(__GNUG__)
 		ssr->config->compiler = SSR_COMPILER_GCC;
 #elif defined(_MSC_VER)
+		ssr->config->compiler = SSR_COMPILER_MSVC;
 #	if _MSC_VER >= 1910
+		ssr->config->msvc_ver = SSR_MSVC_VER_14_1;
 		ssr->config->msvc141_path = NULL;
-		ssr->config->compiler = SSR_COMPILER_MSVC_14_1;
 #	elif _MSC_VER >= 1900
-        ssr->config->compiler = SSR_COMPILER_MSVC_14_0;
+		ssr->config->msvc_ver = SSR_MSVC_VER_14_0;
 #	else
 #		error Previous MSVC versions have not been tested, but should probably work with the right paths
 #	endif
@@ -1426,14 +1468,20 @@ SSR_DEF bool ssr_init(struct ssr_t* ssr, const char* root, struct ssr_config_t* 
         *ssr->config = *config;
     }
 
-	if (ssr->config->compiler == SSR_COMPILER_MSVC && ssr->config->msvc_ver == SSR_MSVC_VER_14_1)
+	if (ssr->config->compiler == SSR_COMPILER_MSVC)
 	{
-		// TODO run vswhere
-		const char* vswhere_cmd = "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe -property installationPath";
-		_ssr_str_t output;
-		_ssr_run(vswhere_cmd, &output, NULL);
-		ssr->config->msvc141_path = _ssr_str_f("%s/VC/Auxiliary/Build/", output).b;
-		//ssr->config->msvc141_path = "C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Auxiliary/Build/";
+		if (ssr->config->msvc_ver == SSR_MSVC_VER_14_1) 
+		{
+			const char* vswhere_cmd = "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe -property installationPath";
+			_ssr_str_t output;
+			_ssr_run(vswhere_cmd, &output, NULL);
+			ssr->config->msvc141_path = _ssr_str_f("%s/VC/Auxiliary/Build/", output).b;
+		} 
+		else 
+		{
+			// TODO
+			assert(false);
+		}
 	}
 
     /* Syntax:
