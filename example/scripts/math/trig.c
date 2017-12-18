@@ -6,7 +6,7 @@
 
 ssr_func(float, my_sin)(float v)
 {
-	printf("m y_sin(%f)=", v);
+	printf("my_sin(%f)=", v);
 	return sinf(v);
 }
 
