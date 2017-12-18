@@ -1139,9 +1139,9 @@ static bool _ssr_compile_msvc(const char* input, ssr_config_t* config, const cha
 			compile_out = _ssr_str_f("%s.obj", _out);
 
 		// vcvars - base - beg_args - default_flags - gen_dbg - mt_lib - compile_out - end_args - input files
-		char* fmt = "%s > nul && cl.exe %s %s %s %s /Fo\"%s\" %s \"%s\"";
+		char* fmt = "%s > nul && cl.exe %s %s %s %s %s /Fo\"%s\" %s \"%s\"";
 
-		_ssr_str_t compile = _ssr_str_f(fmt, vcvars, beg_args, default_args, gen_dbg, mt_lib, stages & _SSR_LINK ? compile_out.b : _out, end_args, input);
+		_ssr_str_t compile = _ssr_str_f(fmt, vcvars, beg_args, default_args, gen_dbg, mt_lib, defines, stages & _SSR_LINK ? compile_out.b : _out, end_args, input);
 		_ssr_log(SSR_CB_INFO, "Compiling %s ...", input);
 
 		_ssr_str_t err;
@@ -1636,7 +1636,6 @@ static void _ssr_on_file(void* args, const char* base, const char* filename)
 
             // Finding new function pointer
             void* new_fptr = _ssr_lib_func_addr(&shared_lib, routine->name.b);
-			routine->addr = new_fptr;
 
             _ssr_lock_acq(&routine->moos_lock);
             size_t moos_len = _ssr_vec_len(&routine->moos);
@@ -1776,7 +1775,10 @@ SSR_DEF bool ssr_run(struct ssr_t* ssr)
             linker_input_cap *= 2;
         }
 
-        snprintf(linker_input, linker_input_cap, "%s %s", linker_input, out.b);
+		if (i == 0)
+			snprintf(linker_input, linker_input_cap, "%s", out.b);
+		else
+			snprintf(linker_input, linker_input_cap, "%s %s", linker_input, out.b);
         linker_input_len += out_len;
 
         // In order to avoid name clashes <script-id>_<func>
