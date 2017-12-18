@@ -1,4 +1,4 @@
-# Scriptosaurus - Single-Header C Live Scripting 
+# Scriptosaurus - Single-Header C Live Scripting
 
 ### Introduction
 Scriptosaurus is a single-header C hot-reloading library. It's an end-to-end solution that runs a daemon on the specified user directory, recompiles the code on changes and hot-swaps the shared library replacing registered function pointers. 
@@ -128,3 +128,7 @@ typedef struct ssr_config_t
 
 **Backends**: Win32, Posix
 **Compilers**: gcc, clang, msvc
+
+
+## Acknowledgements
+[c4stan](https://github.com/c4stan)
