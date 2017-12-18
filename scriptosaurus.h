@@ -1636,6 +1636,7 @@ static void _ssr_on_file(void* args, const char* base, const char* filename)
 
             // Finding new function pointer
             void* new_fptr = _ssr_lib_func_addr(&shared_lib, routine->name.b);
+			routine->addr = new_fptr;
 
             _ssr_lock_acq(&routine->moos_lock);
             size_t moos_len = _ssr_vec_len(&routine->moos);
