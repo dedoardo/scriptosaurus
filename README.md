@@ -128,7 +128,3 @@ typedef struct ssr_config_t
 
 **Backends**: Win32, Posix
 **Compilers**: gcc, clang, msvc
-
-
-## Acknowledgements
-Thanks to [c4stan](https://github.com/c4stan) for the help
